@@ -721,6 +721,9 @@ impl EconomyEngine {
             stocks: save.stocks,
             markets: save.markets,
             macro_state: save.macro_states,
+            flow: save.flow,
+            player: save.player,
+            npcs: save.npcs,
             used_names: save.used_names.into_iter().collect(),
             knobs: Knobs::default(), selected: 0,
         }

@@ -229,7 +229,7 @@ impl eframe::App for MarketDynamo {
                     col[0].label(format!("output gap    {:+.2}% ",      mc.output_gap * 100.0));
                     col[0].label(format!("money supply  {} ",           money(mc.money_supply)));
                     col[0].label(format!("market cap    {} ",           money(s.total_market_cap)));
-                    col[0].label(format!("volume/tick   {} ",           money(s.full_volume)));
+                    col[0].label(format!("volume/tick   {} ",           money(s.total_volume)));
 
                     // (2) yield curve mini-plot, inverts before recession
                     col[1].heading("yield curve");
