@@ -1,0 +1,25 @@
+[package]
+name = "tixr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossbeam-channel = "0.5.15"
+eframe = "0.30"
+egui_plot = "0.30"
+#egui_plot = "0.35.0"
+#egui_plot = "0.36.0"
+
+rand = "0.10.1"
+rand_chacha = "0.10.0"
+
+rkyv = "0.8.16"
+# rkyv = "0.8"
+
+# for later image exports below
+# image = { version = "0.25", default-features = false, features = ["png"]}
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
