@@ -29,37 +29,49 @@ impl Default for Knobs {
 impl Knobs {
     pub fn sliders(&mut self) -> [(&'static str, &mut f32, f32, f32); 8] {
         [
-            ("speed",   &mut self.speed,            0.1, 8.0),
-            ("vol",     &mut self.vol_mult,         0.0, 4.0),
-            ("jumps",   &mut self.jump_mult,        0.0, 6.0),
-            ("drift",   &mut self.drift_mult,      -1.0, 3.0),
-            ("crash",   &mut self.crash_mult,       0.5, 4.0),
-            ("defunct", &mut self.ending_mult,      0.0, 6.0),
-            ("zealous", &mut self.broker_aggro,     0.0, 5.0),
-            ("liquid",  &mut self.impact_mult,      0.0, 4.0),
+            (" speed=",          &mut self.speed,            0.01, 800.0),
+            (" volume=",        &mut self.vol_mult,         0.0, 100.0),
+            (" jumps=",         &mut self.jump_mult,        0.0, 16.0),
+            (" drifting=",      &mut self.drift_mult,      -1.0, 16.0),
+            (" dumping=",       &mut self.crash_mult,       0.5, 16.0),
+            (" defunct=",       &mut self.ending_mult,      0.0, 16.0),
+            (" zeal=",          &mut self.broker_aggro,     0.0, 64.0),
+            (" liquid=",        &mut self.impact_mult,      0.0, 128.0),
         ]
     }
 
     pub fn boring() -> Self {
         Self {
-            speed:              0.6,
-            vol_mult:           0.5,
-            jump_mult:          0.3,
-            crash_mult:         0.6,
-            ending_mult:        0.3,
+            speed:              0.7,
+            vol_mult:           0.7,
+            jump_mult:          0.7,
+            crash_mult:         0.7,
+            ending_mult:        0.7,
             ..Default::default()
         }
     }
     pub fn casino() -> Self {
         Self {
-            speed:              3.0,
-            vol_mult:           2.2,
-            jump_mult:          3.5,
-            crash_mult:         2.5,
-            ending_mult:        3.0,
-            broker_aggro:       2.5,
-            impact_mult:        2.0,
-            drift_mult:         1.0,
+            speed:              10.0,
+            vol_mult:           2.0,
+            jump_mult:          4.0,
+            crash_mult:         4.0,
+            ending_mult:        0.5,
+            broker_aggro:       1.5,
+            impact_mult:        1.5,
+            drift_mult:         2.0,
+        }
+    }
+    pub fn rush() -> Self {
+        Self {
+            speed:              800.0,
+            vol_mult:           1.5,
+            jump_mult:          1.5,
+            crash_mult:         1.5,
+            ending_mult:        1.5,
+            broker_aggro:       1.5,
+            impact_mult:        1.5,
+            drift_mult:         1.5,
         }
     }
 }

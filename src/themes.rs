@@ -24,14 +24,14 @@ impl Theme {
     pub fn palette(self) -> Palette {
         match self {
             Theme::DarkMode => Palette {
-                panel_bg:                   Color32::from_rgb(11, 18, 11),
-                plot_bg:                    Color32::from_rgb(9, 11, 9),
-                text:                       Color32::from_rgb(202, 222, 202),
-                text_weak:                  Color32::from_rgb(111, 145, 111),
-                accent:                     Color32::from_rgb(11, 234, 128),
-                up:                         Color32::from_rgb(44, 222, 128),
-                down:                       Color32::from_rgb(234, 77, 66),
-                grid:                       Color32::from_rgb(27, 36, 27),
+                panel_bg:                   Color32::from_rgb(9, 11, 9),
+                plot_bg:                    Color32::from_rgb(1, 3, 1),
+                text:                       Color32::from_rgb(222, 252, 222),
+                text_weak:                  Color32::from_rgb(117, 180, 117),
+                accent:                     Color32::from_rgb(9, 243, 145),
+                up:                         Color32::from_rgb(36, 243, 117),
+                down:                       Color32::from_rgb(243, 66, 48),
+                grid:                       Color32::from_rgb(18, 27, 18),
             },
             Theme::LightMode => Palette {
                 panel_bg:                   Color32::from_rgb(234, 222, 207),

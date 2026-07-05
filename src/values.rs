@@ -20,8 +20,8 @@ pub const DAYS_REST:                u64 = 2; // 1
 pub const LENGTH_WEEK:              u64 = DAYS_TRADING + DAYS_REST;
 
 
-pub const PREHEAT_YEARS:            u64 = 0;
-pub const PREHEAT_TICKS:            u64 = PREHEAT_YEARS * DAYS_YEAR * TICKS_DAY;
+pub const PREHEAT_YEARS:            f64 = 0.022223;
+pub const PREHEAT_TICKS:            f64 = PREHEAT_YEARS * DAYS_YEAR as f64 * TICKS_DAY as f64;
 pub const DAYS_HISTOGRAPH:          usize = 1280;
 pub const LIVE_RING:                usize = 1024;
 
@@ -90,6 +90,7 @@ pub const TYPE_CURRENCY:            &str = "$";
 
 
 pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // remove 0123456789,
+pub const NAMEPLATE_VOWELS:         &str = "AEIOUY";
 //pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHKLMNOPQRSTUVWXYZ123456789"; // remove 0,
 //pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; // remove j, o, q, u, w, 0, 1
 //pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIKLMNPRSTVXYZ23456789"; // remove j, o, q, u, w, 0, 1
@@ -146,5 +147,5 @@ pub const : = ;*/
 
 
 
-pub const WINDOW_SCALE_WIDTHS: f32 = 1800.0;
-pub const WINDOW_SCALE_HEIGHT: f32 = 900.0;
+pub const WINDOW_SCALE_WIDTHS: f32 = 1810.0;
+pub const WINDOW_SCALE_HEIGHT: f32 = 920.0;

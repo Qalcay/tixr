@@ -111,11 +111,11 @@ impl MarketDynamo {
 
 fn arrow_direction(ui: &mut Ui, perc: f32, up: Color32, down: Color32) {
     let (arrow, col) = if perc >= 0.0
-        {       ("Δ", up) }
+        {       ("Λ", up) }
         else {  ("V", down) };
         //{       ("▲", up) }
         //else {  ("▼", down) };
-    ui.colored_label(col, format!(" {arrow} {:+2}%", perc));
+    ui.colored_label(col, format!(" {arrow} {:+.2}%", perc));
 }
 
 fn money(v: f64) -> String {
@@ -131,6 +131,13 @@ fn money(v: f64) -> String {
 }
 
 impl eframe::App for MarketDynamo {
+    /*fn setup_fonts(ctx: &egui::Context) {
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert("full", into(),
+            egui::FontData::from_static(include_bytes!("")).into());
+        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "full".into());
+        ctx.set_fonts(fonts);
+    }*/
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         //let mut vis  = egui::Visuals::dark();
         //vis.override_text_color = Some(Color32::from_rgb(202, 189, 198));
@@ -158,8 +165,8 @@ impl eframe::App for MarketDynamo {
                     ui.horizontal(|ui| {
                         ui.strong(format!(" {}: ", s.markets[m].0));
                         let mut cells: Vec<&StockRow> =
-                            s.rows.iter().filter(|r| r.market_id as usize == m).take(40).collect();
-                        let shift = ((t * 0.667) as usize) % cells.len().max(1);
+                            s.rows.iter().filter(|r| r.market_id as usize == m).take(19).collect();
+                        let shift = ((t * 0.3336) as usize) % cells.len().max(1);
                         cells.rotate_left(shift);
                         for r in cells.iter().take(14) {
                             //arrow_direction(ui, r.perc, palette.up, palette.down);
@@ -184,11 +191,11 @@ impl eframe::App for MarketDynamo {
                         }
                     }
                     ui.separator();
-                    let open = if s.market_open { "[O] 'OPEN'" } else { "[x] 'CLOSED'" };
+                    let open = if s.market_open { " OPEN " } else { " CLOSED " };
                     ui.colored_label(if s.market_open { COLOR_UPWARDS } else { COLOR_DOWNWARDS }, open);
-                    ui.label(format!("| day {} | heat {:.0}% | {}",
-                        s.day,
-                        0.0,
+                    ui.label(format!("|  Day: {} |  Tick: {} |  {}",
+                        s.day + 1,
+                        s.tick,
                         s.flow.label()));
                 });
             } else {
@@ -197,7 +204,7 @@ impl eframe::App for MarketDynamo {
         });
 
         egui::SidePanel::left("stocklist").resizable(true).default_width(128.0).show(ctx, |ui| {
-            ui.heading("listing");
+            //ui.heading("listing");
             ui.horizontal(|ui| {
                 ui.label("@= ");
                 ui.text_edit_singleline(&mut self.search);
@@ -226,18 +233,18 @@ impl eframe::App for MarketDynamo {
         egui::TopBottomPanel::bottom("dock").resizable(true).default_height(230.0).show(ctx, |ui| {
             if let Some(s) = &self.recent {
                 ui.columns(4, |col| {
-                    col[0].heading("economy");
+                    col[0].heading("ECONOMY");
                     let mc = &s.macro_state;
-                    col[0].label(format!("policy rate   {:.2}% ",       mc.short_rate * 100.0));
-                    col[0].label(format!("10yr yield    {:.2}% ",       mc.long_rate * 100.0));
-                    col[0].label(format!("inflation     {:.2}% ",       mc.inflation * 100.0));
-                    col[0].label(format!("output gap    {:+.2}% ",      mc.output_gap * 100.0));
-                    col[0].label(format!("money supply  {} ",           money(mc.money_supply)));
-                    col[0].label(format!("market cap    {} ",           money(s.total_market_cap)));
-                    col[0].label(format!("volume/tick   {} ",           money(s.total_volume)));
+                    col[0].label(format!("Policy Rate:     {:.2}% ",       mc.short_rate * 100.0));
+                    col[0].label(format!("10yr Yield:      {:.2}% ",       mc.long_rate * 100.0));
+                    col[0].label(format!("Inflation:       {:.2}% ",       mc.inflation * 100.0));
+                    col[0].label(format!("Output Gap:      {:+.2}% ",      mc.output_gap * 100.0));
+                    col[0].label(format!("Money Supply:    {} ",           money(mc.money_supply)));
+                    col[0].label(format!("Market Cap:      {} ",           money(s.total_market_cap)));
+                    col[0].label(format!("Volume / tick:   {} ",           money(s.total_volume)));
 
                     // (2) yield curve mini-plot, inverts before recession
-                    col[1].heading("yield curve");
+                    col[1].heading(" "); // "yield curve"
                     let plpt: PlotPoints = mc.yield_curve
                         .iter()
                         .enumerate()
@@ -248,21 +255,21 @@ impl eframe::App for MarketDynamo {
                     });
 
 
-                    col[2].heading("pers. ledger");
-                    col[2].label(format!("net worth     {}",            money(s.player_cash)));
-                    col[2].label(format!("equity        {}",            money(s.player_equity)));
+                    col[2].heading("PERS. LEDGER");
+                    col[2].label(format!("Net Worth     {}",            money(s.player_cash)));
+                    col[2].label(format!("Equity        {}",            money(s.player_equity)));
                     let pnl = s.player_equity - PLAYER_WALLET_BEGINS;
                     col[2].colored_label(if pnl >= 0.0 { COLOR_UPWARDS } else { COLOR_DOWNWARDS },
-                        format!("P & L      {}", money(pnl)));
+                        format!("Wager      {}", money(pnl)));
                     col[2].separator();
-                    col[2].label("recent fills?");
+                    //col[2].label("recent fills");
                     for t in self.recent_trades
                         .iter()
-                        .take(6) {
+                        .take(8) {
                             col[2].small(&t.line);
                         }
 
-                    col[3].heading("brokers");
+                    col[3].heading("BROKERS");
                     egui::ScrollArea::vertical()
                         .id_salt("npcscroll")
                         .max_height(180.0)
@@ -272,22 +279,24 @@ impl eframe::App for MarketDynamo {
                                 if ui.selectable_label(sel, format!("{:<8} {}", n.name, money(n.equity))).clicked() {
                                     self.npc_focus = Some(i);
                                 }
-                                if sel { ui.small(format!("strat:   {:?}", n.strategy)); }
+                                if sel { ui.small(format!("Strategy:   {:?}", n.strategy)); }
                             }
                     });
                 });
 
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("&= ");
+                    //ui.label("&= ");
                     ui.spacing_mut().slider_width = 66.0;
                     let mut changed = false;
                     for (label, val, lo, hi) in self.knobs.sliders() {
-                        changed |= ui.add(egui::Slider::new(val, lo..=hi).text(label)).changed();
+                        ui.label(label);
+                        changed |= ui.add(egui::Slider::new(val, lo..=hi)).changed();
                     }
-                    if ui.button("boring").clicked() { self.knobs = Knobs::boring(); changed = true; }
+                    if ui.button("rush").clicked() { self.knobs = Knobs::rush(); changed = true; }
+                    if ui.button("quiet").clicked() { self.knobs = Knobs::boring(); changed = true; }
                     if ui.button("casino").clicked() { self.knobs = Knobs::casino(); changed = true; }
-                    if ui.button("reset").clicked() { self.knobs = Knobs::default(); changed = true; }
+                    if ui.button("default").clicked() { self.knobs = Knobs::default(); changed = true; }
                     if changed { let _ = self.tx.send(SimulatorCommands::SetKnobs(self.knobs)); }
                 });
             }
@@ -309,13 +318,13 @@ impl eframe::App for MarketDynamo {
                             .speed(1000.0)
                             .prefix(TYPE_CURRENCY)
                             .range(0.0..=1e15));
-                        if ui.button("buy").clicked() {
+                        if ui.button("BUY").clicked() {
                             let _ = self.tx.send(SimulatorCommands::Buys { ix: self.selected, notion: self.order_notional });
-                            deconflict_trade_state_from_ui.push(format!("BUYS {name} {}", money(self.order_notional)));
+                            deconflict_trade_state_from_ui.push(format!("Bought '{name}' {}", money(self.order_notional)));
                         }
-                        if ui.button("sell").clicked() {
+                        if ui.button("SELL").clicked() {
                             let _ = self.tx.send(SimulatorCommands::Sell { ix: self.selected, notion: self.order_notional });
-                            deconflict_trade_state_from_ui.push(format!("SELL {name} {}", money(self.order_notional)));
+                            deconflict_trade_state_from_ui.push(format!(" Sold  '{name}' {}", money(self.order_notional)));
                         }
                         if !s.market_open { ui.colored_label(COLOR_DOWNWARDS, "Market Close"); }
                     });
@@ -341,7 +350,7 @@ impl eframe::App for MarketDynamo {
                         });
                 }
             } else {
-                ui.centered_and_justified(|ui| ui.label("start up..."));
+                ui.centered_and_justified(|ui| ui.label("starting up..."));
             }
         });
 
@@ -355,7 +364,12 @@ impl eframe::App for MarketDynamo {
 
 
 fn main() -> eframe::Result<()> {
-    let seed = SeedMarketTheory { q_high: QUOTIENT_HIGH, q_low: QUOTIENT_LOW };
+    let dot_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let seed = SeedMarketTheory {
+        q_high: (dot_time as u64).wrapping_mul(QUOTIENT_HIGH),
+        q_low: ((dot_time >> 64) as u64) ^ QUOTIENT_LOW,
+    };
 
     let (tx_resp, rx_resp) = bounded::<SimulatorResponsiveness>(PRESET_MAX_QUEUE);
     let (tx_cmd, rx_cmd) = bounded::<SimulatorCommands>(64);

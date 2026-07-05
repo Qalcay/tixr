@@ -73,10 +73,10 @@ impl FlowStates {
     }
     pub fn label(self) -> &'static str {
         match self {
-            FlowStates::Zen     => "calm",
-            FlowStates::Bliss   => "bullish",
-            FlowStates::Tumult  => "bearish",
-            FlowStates::Chaos   => "crash"
+            FlowStates::Zen     => "UP MORE",      // bliss
+            FlowStates::Bliss   => "UP",   // bullish
+            FlowStates::Tumult  => "DOWN",   // bearish
+            FlowStates::Chaos   => "DOWN MORE"      // crash
         }
     }
 }
@@ -362,11 +362,15 @@ pub struct EconomyEngine {
 
 impl EconomyEngine {
     pub fn new(seed: SeedMarketTheory) -> Self {
+        let add_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let mut rng = ChaCha8Rng::from_seed(seed.expand());
-        let mut param_rng = SplitMix64::new(seed.as_u128() as u64 ^ SCRAMBLING_SALT);
+        let mut param_rng = SplitMix64::new((seed.as_u128() as u64 ^ SCRAMBLING_SALT) + add_time as u64);
         let mut used_names: HashSet<String> = HashSet::with_capacity(EVALUATED);
 
-        let names = [" #1EX ", " #C2X ", " #4MX ", " #ST8 "];
+        let names = [" #EX01 ", " #CHA2 ", " #4MAQ ", " #AST8 "];
+        //let names = [" #EX1 ", " #CH2 ", " #4MQ ", " #ST8 "];
+        //let names = [" #1EX ", " #C2X ", " #4MX ", " #ST8 "];
         //let names = [" #OnEx ", " #JadEx ", " #QuMax ", " #W1N "];
         //let names = ["PANAXO", "FASQNET", "SORTVEL", "TOPMARK"];
         let mut stocks = Vec::with_capacity(EVALUATED);
@@ -405,7 +409,7 @@ impl EconomyEngine {
             knobs: Knobs::default() ,selected: 0,
         };
 
-        for _ in 0..PREHEAT_TICKS { eng.step(); }
+        for _ in 0..PREHEAT_TICKS as usize { eng.step(); }
         eng.tick = 0;   // start at 0 init, but run prices to age
         eng
     }
