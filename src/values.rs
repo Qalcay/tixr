@@ -15,7 +15,7 @@ pub const DAYS_REST:                u64 = 1;
 pub const LENGTH_WEEK:              u64 = DAYS_TRADING + DAYS_REST;
 
 
-pub const PREHEAT_YEARS:            u64 = 9;
+pub const PREHEAT_YEARS:            u64 = 0;
 pub const PREHEAT_TICKS:            u64 = PREHEAT_YEARS * DAYS_YEAR * TICKS_DAY;
 pub const DAYS_HISTOGRAPH:          usize = 1280;
 pub const LIVE_RING:                usize = 1024;

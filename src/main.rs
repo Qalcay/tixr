@@ -130,11 +130,13 @@ fn money(v: f64) -> String {
 
 impl eframe::App for MarketDynamo {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let mut vis  = egui::Visuals::dark();
+        //let mut vis  = egui::Visuals::dark();
         //vis.override_text_color = Some(Color32::from_rgb(202, 189, 198));
         //ctx.set_visuals(vis);
+
         self.theme.apply(ctx);
         let palette = self.theme.palette();
+        let mut deconflict_trade_state_from_ui: Vec<String> = Vec::new();
 
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
@@ -305,11 +307,11 @@ impl eframe::App for MarketDynamo {
                             .range(0.0..=1e15));
                         if ui.button("buy").clicked() {
                             let _ = self.tx.send(SimulatorCommands::Buys { ix: self.selected, notion: self.order_notional });
-                            self.push_trade(format!("BUYS {name} {}", money(self.order_notional)));
+                            deconflict_trade_state_from_ui.push(format!("BUYS {name} {}", money(self.order_notional)));
                         }
                         if ui.button("sell").clicked() {
                             let _ = self.tx.send(SimulatorCommands::Sell { ix: self.selected, notion: self.order_notional });
-                            self.push_trade(format!("SELL {name} {}", money(self.order_notional)));
+                            deconflict_trade_state_from_ui.push(format!("SELL {name} {}", money(self.order_notional)));
                         }
                         if !s.market_open { ui.colored_label(COLOR_DOWNWARDS, "Market Close"); }
                     });
@@ -336,6 +338,7 @@ impl eframe::App for MarketDynamo {
             }
         });
 
+        for line in deconflict_trade_state_from_ui { self.push_trade(line); }
         ctx.request_repaint(); // to animate the chirons and live feeds
     }
 }
@@ -354,7 +357,7 @@ fn main() -> eframe::Result<()> {
     thread::spawn(move || simulation_thread(seed, rx_cmd, tx_resp, stop_c));
 
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1667.0, 998.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1440.0, 900.0]),
         ..Default::default()
     };
     eframe::run_native("T1XR", native, Box::new(move |_cc| {

@@ -354,7 +354,7 @@ pub struct EconomyEngine {
     pub macro_state:    MacroState,
     pub flow:           FlowStates,
     pub player:         Portfolio,
-    pub npcs:           Brokers,
+    pub npcs:           Vec<Brokers>,
     pub used_names:     HashSet<String>,
     pub knobs:          Knobs,
     pub selected:       usize,
@@ -624,7 +624,7 @@ impl EconomyEngine {
                 let sell = shares.min(held);
                 if sell <= 0.0 { return 0.0; }
                 port.cash += sell * price;
-                *port.holdings.get_mut(ix).unwrap() -= sell;
+                *port.holdings.get_mut(&ix).unwrap() -= sell;
             }
         }
         let impact_mult = self.knobs.impact_mult;
