@@ -87,7 +87,7 @@ pub const TYPE_CURRENCY:            &str = "$";
 //pub const TYPE_CURRENCY:            &str = "ɣ";
 
 
-pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHKLMNOPQRSTUVXYZ123456789"; // remove j, o, q, u, w, 0, 1
+pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHKLMNOPQRSTUVWXYZ123456789"; // remove 0,
 //pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; // remove j, o, q, u, w, 0, 1
 //pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIKLMNPRSTVXYZ23456789"; // remove j, o, q, u, w, 0, 1
 pub const NAMEPLATE_LENGTHS:        [usize; EXCHANGES] = [3, 4, 3, 5]; // per market preference
@@ -119,11 +119,11 @@ pub const SPLIT_MIX_HIGH:           u64 = 0xE198_C891_E198_C891;
 pub const NEXT_U64:                 u64 = 0x9E37_79B9_7F4A_7C15; // <- [sqrt(5) - 1 / 2] 'golden ratio mean'
 
 //pub const Z_STEP_1:                 u64 = 0x9E37_79B1_85EB_CA87; // xxHash tweaked Golden Ratio as odd value
-//pub const Z_STEP_1:                 u64 = 0xAC77_BE55_CA33_EC11;
+//pub const Z_STEP_1:                 u64 = 0xAC77_BE55_CA33_EC11; <- my dumb val
 pub const Z_STEP_1:                 u64 = 0xBF58_476D_1CE4_E5B9;
 
 //pub const Z_STEP_2:                 u64 = 0xC2B2_AE3D_27D4_EB4F; // xxHash second mult...
-//pub const Z_STEP_2:                 u64 = 0x6667_981A_BCDE_F198;
+//pub const Z_STEP_2:                 u64 = 0x6667_981A_BCDE_F198; <- my dumb val
 pub const Z_STEP_2:                 u64 = 0x94D0_49BB_1331_11EB;
 
 //pub const BIT_SHIFT_1:              u64 = 31; // xxHash
