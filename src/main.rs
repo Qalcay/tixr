@@ -159,7 +159,7 @@ impl eframe::App for MarketDynamo {
                         ui.strong(format!(" {}: ", s.markets[m].0));
                         let mut cells: Vec<&StockRow> =
                             s.rows.iter().filter(|r| r.market_id as usize == m).take(40).collect();
-                        let shift = ((t * 6.0) as usize) % cells.len().max(1);
+                        let shift = ((t * 0.667) as usize) % cells.len().max(1);
                         cells.rotate_left(shift);
                         for r in cells.iter().take(14) {
                             let col = if r.perc >= 0.0 { COLOR_UPWARDS } else { COLOR_DOWNWARDS };
