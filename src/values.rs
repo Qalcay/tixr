@@ -1,17 +1,21 @@
 use eframe::egui::Color32;
 
-pub const EVALUATED:                usize = (1 << 13) - 1;
+//pub const EVALUATED:                usize = (1 << 13) - 1;
+pub const EVALUATED:                usize = (1 << 10) - 1;
+//pub const EVALUATED:                usize = (1 << 13) - 1;
 pub const EXCHANGES:                usize = 4;
 
 
-pub const DAYS_YEAR:                u64 = 256;
-pub const TICKS_DAY:                u64 = 64;
-pub const DT:                       f32 = 1.0 / 16384.0; // = 1 / (252 * 8) ??
-//pub const DT:                     f32 = 1.0 / 2016.0; // = 1 / (252 * 8) ??
+pub const DAYS_YEAR:                u64 = 384; // 256
+pub const TICKS_DAY:                u64 = 256; // 64
+//pub const TICKS_DAY:                u64 = 16;  // 64
+pub const DT:                       f32 = 1.0 / 98304.0; // = 1 / (384 * 64) ??
+//pub const DT:                       f32 = 1.0 / 16384.0; // = 1 / (252 * 64) ??
+//pub const DT:                       f32 = 1.0 / 2016.0; // = 1 / (252 * 8) ??
 
 
-pub const DAYS_TRADING:               u64 = 3;
-pub const DAYS_REST:                u64 = 1;
+pub const DAYS_TRADING:             u64 = 5; // 3
+pub const DAYS_REST:                u64 = 2; // 1
 pub const LENGTH_WEEK:              u64 = DAYS_TRADING + DAYS_REST;
 
 
@@ -23,7 +27,7 @@ pub const LIVE_RING:                usize = 1024;
 
 pub const MU_ANN:                   (f32, f32) = (-0.033, 0.1667);
 pub const BETA_RANGE:               (f32, f32) = (0.256, 1.667);
-pub const SIGMA_LONG:             (f32, f32) = (0.15, 0.54);
+pub const SIGMA_LONG:               (f32, f32) = (0.15, 0.54);
 pub const CYCLE_AMPLITUDE:          (f32, f32) = (0.0, 0.111);
 pub const CYCLE_PERIODICITY:        (f32, f32) = (1.5, 6.0);
 pub const INITIAL_SOLVENCY:         (f32, f32) = (0.667, 1.667);
@@ -76,8 +80,9 @@ pub const PLAYER_WALLET_BEGINS:     f64 = 0.777e6;
 // keep small, allows whales/panics to move markets
 pub const PRICE_ORDER_IMPACT:       f32 = 0.6;
 
-
-pub const TYPE_CURRENCY:            &str = "Ж";
+pub const TYPE_CURRENCY:            &str = "$";
+//pub const TYPE_CURRENCY:            &str = "Э";
+//pub const TYPE_CURRENCY:            &str = "Ж";
 //pub const TYPE_CURRENCY:            &str = "ɀ";
 //pub const TYPE_CURRENCY:            &str = "ɣ";
 
@@ -109,29 +114,34 @@ pub const COLOR_DOWNWARDS: Color32 = Color32::from_rgb(234, 77, 66);
 pub const SPLIT_MIX_HIGH:           u64 = 0xE198_C891_E198_C891;
 //pub const SPLIT_MIX_HIGH:           u64 = 0xDEAD_BEEF_CAFE_F00D;
 
-pub const NEXT_U64:                 u64 = 0x517C_C1B7_2722_0A95; // high-entropy odd number, purely arbitrary
+//pub const NEXT_U64:                 u64 = 0x517C_C1B7_2722_0A95; // high-entropy odd number, purely arbitrary
 //pub const NEXT_U64:                 u64 = 0x98AB_87BC_76CD_65DE;
-//pub const NEXT_U64:                 u64 = 0x9E37_79B9_7F4A_7C15; // <- [sqrt(5) - 1 / 2] 'golden ratio mean'
+pub const NEXT_U64:                 u64 = 0x9E37_79B9_7F4A_7C15; // <- [sqrt(5) - 1 / 2] 'golden ratio mean'
 
-pub const Z_STEP_1:                 u64 = 0x9E37_79B1_85EB_CA87; // xxHash tweaked Golden Ratio as odd value
+//pub const Z_STEP_1:                 u64 = 0x9E37_79B1_85EB_CA87; // xxHash tweaked Golden Ratio as odd value
 //pub const Z_STEP_1:                 u64 = 0xAC77_BE55_CA33_EC11;
-//pub const Z_STEP_1:                 u64 = 0xBF58_476D_1CE4_E5B9;
+pub const Z_STEP_1:                 u64 = 0xBF58_476D_1CE4_E5B9;
 
-pub const Z_STEP_2:                 u64 = 0xC2B2_AE3D_27D4_EB4F; // xxHash second mult...
+//pub const Z_STEP_2:                 u64 = 0xC2B2_AE3D_27D4_EB4F; // xxHash second mult...
 //pub const Z_STEP_2:                 u64 = 0x6667_981A_BCDE_F198;
-//pub const Z_STEP_2:                 u64 = 0x94D0_49BB_1331_11EB;
+pub const Z_STEP_2:                 u64 = 0x94D0_49BB_1331_11EB;
 
-pub const BIT_SHIFT_1:              u64 = 31; // xxHash
-//pub const BIT_SHIFT_1:              u64 = 30; // used in SplitMix64 by Vigno for his consts
-pub const BIT_SHIFT_2:              u64 = 33; // xxHash
-//pub const BIT_SHIFT_2:              u64 = 27;
-pub const BIT_SHIFT_3:              u64 = 33; // xxHash
-//pub const BIT_SHIFT_3:              u64 = 31;
+//pub const BIT_SHIFT_1:              u64 = 31; // xxHash
+pub const BIT_SHIFT_1:              u64 = 30; // used in SplitMix64 by Vigno for his consts
+//pub const BIT_SHIFT_2:              u64 = 33; // xxHash
+pub const BIT_SHIFT_2:              u64 = 27;
+//pub const BIT_SHIFT_3:              u64 = 33; // xxHash
+pub const BIT_SHIFT_3:              u64 = 31;
 
 
-pub const SCRAMBLING_SALT:            u64 = 0xB7E1_5162_8AED_2A6B;
-//pub const SCRAMBLING_SALT:            u64 = 0xA5A5_5A5A_F0F0_0F0F;
+//pub const SCRAMBLING_SALT:            u64 = 0xB7E1_5162_8AED_2A6B;
+pub const SCRAMBLING_SALT:          u64 = 0xA5A5_5A5A_F0F0_0F0F;
 
 
 /*pub const : = ;
 pub const : = ;*/
+
+
+
+pub const WINDOW_SCALE_WIDTHS: f32 = 1800.0;
+pub const WINDOW_SCALE_HEIGHT: f32 = 900.0;

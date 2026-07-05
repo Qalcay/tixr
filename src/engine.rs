@@ -270,9 +270,9 @@ pub enum Strategy {
 
 #[derive(Clone, Debug, Archive, Serialize, Deserialize)]
 pub struct Brokers {
-    pub name: String,
-    pub strategy: Strategy,
-    pub port: Portfolio,
+    pub name:           String,
+    pub strategy:       Strategy,
+    pub port:           Portfolio,
 }
 
 
@@ -290,7 +290,7 @@ pub struct StockRow {
     pub market_id:      u16,
     pub price:          f32,
     pub perc:           f32,
-    pub alive:          bool,
+    pub set_alive:      bool,
 }
 
 #[derive(Clone, Debug)]
@@ -366,7 +366,7 @@ impl EconomyEngine {
         let mut param_rng = SplitMix64::new(seed.as_u128() as u64 ^ SCRAMBLING_SALT);
         let mut used_names: HashSet<String> = HashSet::with_capacity(EVALUATED);
 
-        let names = ["#OnEx", "#JadeEx", "#QuMark", "#W1N"];
+        let names = [" #OnEx ", " #JadEx ", " #QuMax ", " #W1N "];
         //let names = ["PANAXO", "FASQNET", "SORTVEL", "TOPMARK"];
         let mut stocks = Vec::with_capacity(EVALUATED);
         for i in 0..EVALUATED {
@@ -657,7 +657,7 @@ impl EconomyEngine {
                     market_id: s.market_id,
                     price: s.price,
                     perc,
-                    alive: s.set_alive
+                    set_alive: s.set_alive
                 }
             }).collect();
 
@@ -697,7 +697,7 @@ impl EconomyEngine {
 
     pub fn saver(&self) -> SaveGameState {
         SaveGameState {
-            version:             16,
+            version:             32,
             seed:               self.seed,
             tick:               self.tick,
             flow:               self.flow,

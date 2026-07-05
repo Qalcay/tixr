@@ -111,9 +111,11 @@ impl MarketDynamo {
 
 fn arrow_direction(ui: &mut Ui, perc: f32, up: Color32, down: Color32) {
     let (arrow, col) = if perc >= 0.0
-        {       ("▲", up) }
-        else {  ("▼", down) };
-    ui.colored_label(col, format!("{arrow} {:+2}%", perc));
+        {       ("Δ", up) }
+        else {  ("V", down) };
+        //{       ("▲", up) }
+        //else {  ("▼", down) };
+    ui.colored_label(col, format!(" {arrow} {:+2}%", perc));
 }
 
 fn money(v: f64) -> String {
@@ -154,14 +156,14 @@ impl eframe::App for MarketDynamo {
                 let t = ctx.input(|i| i.time);
                 for m in 0..s.markets.len().min(EXCHANGES) {
                     ui.horizontal(|ui| {
-                        ui.strong(format!("{}:", s.markets[m].0));
+                        ui.strong(format!(" {}: ", s.markets[m].0));
                         let mut cells: Vec<&StockRow> =
                             s.rows.iter().filter(|r| r.market_id as usize == m).take(40).collect();
                         let shift = ((t * 6.0) as usize) % cells.len().max(1);
                         cells.rotate_left(shift);
                         for r in cells.iter().take(14) {
                             let col = if r.perc >= 0.0 { COLOR_UPWARDS } else { COLOR_DOWNWARDS };
-                            ui.colored_label(col, format!("{} {:.2} {:+.1}%",
+                            ui.colored_label(col, format!(" {}  {:.2} {:+.1} %",
                                 r.nameplate,
                                 r.price,
                                 r.perc));
@@ -181,7 +183,7 @@ impl eframe::App for MarketDynamo {
                         }
                     }
                     ui.separator();
-                    let open = if s.market_open { "[o] 'OPEN'" } else { "[x] 'CLOSED'" };
+                    let open = if s.market_open { "[O] 'OPEN'" } else { "[x] 'CLOSED'" };
                     ui.colored_label(if s.market_open { COLOR_UPWARDS } else { COLOR_DOWNWARDS }, open);
                     ui.label(format!("| day {} | {} | heat {:.0}%",
                         s.day,
@@ -193,10 +195,10 @@ impl eframe::App for MarketDynamo {
             }
         });
 
-        egui::SidePanel::left("stocklist").resizable(true).default_width(300.0).show(ctx, |ui| {
+        egui::SidePanel::left("stocklist").resizable(true).default_width(128.0).show(ctx, |ui| {
             ui.heading("listing");
             ui.horizontal(|ui| {
-                ui.label("@=");
+                ui.label("@= ");
                 ui.text_edit_singleline(&mut self.search);
             });
             ui.separator();
@@ -277,6 +279,7 @@ impl eframe::App for MarketDynamo {
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
                     ui.label("& sandbox: ");
+                    ui.spacing_mut().slider_width = 66.0;
                     let mut changed = false;
                     for (label, val, lo, hi) in self.knobs.sliders() {
                         changed |= ui.add(egui::Slider::new(val, lo..=hi).text(label)).changed();
@@ -322,6 +325,8 @@ impl eframe::App for MarketDynamo {
                         .map(|(i, &v)| [i as f64, v as f64]).collect();
                     Plot::new("plot")
                         .view_aspect(PLOT_ASPECT_RATIO)
+                        //.show_axes([true, true])
+                        //.show_grid([true, true])
                         .allow_scroll(true)
                         .allow_drag(true)
                         .allow_zoom(true)
@@ -330,7 +335,8 @@ impl eframe::App for MarketDynamo {
                             pu.line(Line::new(pointers)
                             //pu.line(Line::new(name.clone(), pointers)
                                 .color(palette.accent)
-                                .width(1.3));
+                                .width(1.3)
+                                .fill(0.11));
                         });
                 }
             } else {
@@ -357,7 +363,7 @@ fn main() -> eframe::Result<()> {
     thread::spawn(move || simulation_thread(seed, rx_cmd, tx_resp, stop_c));
 
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1440.0, 900.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([WINDOW_SCALE_WIDTHS, WINDOW_SCALE_HEIGHT]),
         ..Default::default()
     };
     eframe::run_native("T1XR", native, Box::new(move |_cc| {
