@@ -1,8 +1,9 @@
 use eframe::egui::Color32;
 
 //pub const EVALUATED:                usize = (1 << 13) - 1;
+//pub const EVALUATED:                usize = 2;
 pub const EVALUATED:                usize = (1 << 10) - 1;
-//pub const EVALUATED:                usize = (1 << 13) - 1;
+//pub const EVALUATED:                usize = (1 << 11) - 256;
 pub const EXCHANGES:                usize = 4;
 
 
@@ -70,7 +71,8 @@ pub const CLAMP_RATE_GAP:           (f32, f32) = (-0.07, 0.07);
 pub const TERM_PREMIUM:             f32 = 0.0111; // extra yield for lends 'long' against 'short'
 
 
-pub const BROKERS:                  usize = 127;
+//pub const BROKERS:                  usize = (1 << 7) - 1; // 127
+pub const BROKERS:                  usize = (1 << 8) - 1; // 255
 pub const BROKER_ACTION_CHANCE:     f32 = 0.07654321;
 pub const BROKER_WALLET_LAUNCH:     (f64, f64) = (2.7e6, 19.2e9);
 pub const PLAYER_WALLET_BEGINS:     f64 = 0.777e6;
@@ -87,10 +89,11 @@ pub const TYPE_CURRENCY:            &str = "$";
 //pub const TYPE_CURRENCY:            &str = "ɣ";
 
 
-pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHKLMNOPQRSTUVWXYZ123456789"; // remove 0,
+pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // remove 0123456789,
+//pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHKLMNOPQRSTUVWXYZ123456789"; // remove 0,
 //pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; // remove j, o, q, u, w, 0, 1
 //pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIKLMNPRSTVXYZ23456789"; // remove j, o, q, u, w, 0, 1
-pub const NAMEPLATE_LENGTHS:        [usize; EXCHANGES] = [3, 4, 3, 5]; // per market preference
+pub const NAMEPLATE_LENGTHS:        [usize; EXCHANGES] = [3, 4, 4, 4]; // per market preference
 
 
 pub const PLOT_ASPECT_RATIO:        f32 = 3.111;

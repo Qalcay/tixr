@@ -162,6 +162,7 @@ impl eframe::App for MarketDynamo {
                         let shift = ((t * 0.667) as usize) % cells.len().max(1);
                         cells.rotate_left(shift);
                         for r in cells.iter().take(14) {
+                            //arrow_direction(ui, r.perc, palette.up, palette.down);
                             let col = if r.perc >= 0.0 { COLOR_UPWARDS } else { COLOR_DOWNWARDS };
                             ui.colored_label(col, format!(" {}  {:.2} {:+.1} %",
                                 r.nameplate,
@@ -185,10 +186,10 @@ impl eframe::App for MarketDynamo {
                     ui.separator();
                     let open = if s.market_open { "[O] 'OPEN'" } else { "[x] 'CLOSED'" };
                     ui.colored_label(if s.market_open { COLOR_UPWARDS } else { COLOR_DOWNWARDS }, open);
-                    ui.label(format!("| day {} | {} | heat {:.0}%",
+                    ui.label(format!("| day {} | heat {:.0}% | {}",
                         s.day,
-                        s.flow.label(),
-                        0.0));
+                        0.0,
+                        s.flow.label()));
                 });
             } else {
                 ui.label("..., .., ., running...");
@@ -278,7 +279,7 @@ impl eframe::App for MarketDynamo {
 
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("& sandbox: ");
+                    ui.label("&= ");
                     ui.spacing_mut().slider_width = 66.0;
                     let mut changed = false;
                     for (label, val, lo, hi) in self.knobs.sliders() {

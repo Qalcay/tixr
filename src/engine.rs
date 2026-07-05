@@ -290,7 +290,7 @@ pub struct StockRow {
     pub market_id:      u16,
     pub price:          f32,
     pub perc:           f32,
-    pub set_alive:      bool,
+    pub alive:      bool,
 }
 
 #[derive(Clone, Debug)]
@@ -366,7 +366,8 @@ impl EconomyEngine {
         let mut param_rng = SplitMix64::new(seed.as_u128() as u64 ^ SCRAMBLING_SALT);
         let mut used_names: HashSet<String> = HashSet::with_capacity(EVALUATED);
 
-        let names = [" #OnEx ", " #JadEx ", " #QuMax ", " #W1N "];
+        let names = [" #1EX ", " #C2X ", " #4MX ", " #ST8 "];
+        //let names = [" #OnEx ", " #JadEx ", " #QuMax ", " #W1N "];
         //let names = ["PANAXO", "FASQNET", "SORTVEL", "TOPMARK"];
         let mut stocks = Vec::with_capacity(EVALUATED);
         for i in 0..EVALUATED {
@@ -657,7 +658,7 @@ impl EconomyEngine {
                     market_id: s.market_id,
                     price: s.price,
                     perc,
-                    set_alive: s.set_alive
+                    alive: s.set_alive
                 }
             }).collect();
 
