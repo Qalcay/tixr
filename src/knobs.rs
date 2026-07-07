@@ -14,7 +14,7 @@ pub struct Knobs {
 impl Default for Knobs {
     fn default() -> Self {
         Self {
-            speed:              1.0,
+            speed:              0.8,
             vol_mult:           1.0,
             jump_mult:          1.0,
             drift_mult:         1.0,

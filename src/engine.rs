@@ -1,4 +1,5 @@
 use crate::values::*;
+use crate::magic::*;
 use crate::knobs::Knobs;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -73,10 +74,10 @@ impl FlowStates {
     }
     pub fn label(self) -> &'static str {
         match self {
-            FlowStates::Zen     => "UP MORE",      // bliss
-            FlowStates::Bliss   => "UP",   // bullish
-            FlowStates::Tumult  => "DOWN",   // bearish
-            FlowStates::Chaos   => "DOWN MORE"      // crash
+            FlowStates::Zen     => "GOING",      // bliss
+            FlowStates::Bliss   => "GO",   // bullish
+            FlowStates::Tumult  => "FALL",   // bearish
+            FlowStates::Chaos   => "FALLING"      // crash
         }
     }
 }
@@ -156,63 +157,83 @@ pub struct MacroState {
 impl MacroState {
     fn new() -> Self {
         Self {
-            short_rate: 0.03,
-            inflation: 0.022,
-            output_gap: 0.0,
-            money_supply: INITIAL_MONEY_SUPPLY,
-            long_rate: 0.038,
-            yield_curve: [0.03, 0.032, 0.034, 0.036, 0.038, 0.04]
+            short_rate:     SHORT_RATE,
+            inflation:      INFLATION_MODE,
+            output_gap:     OUTPUT_GAP,
+            money_supply:   INITIAL_MONEY_SUPPLY,
+            long_rate:      LONG_RATE,
+            yield_curve: [
+                YC_0,
+                YC_1,
+                YC_2,
+                YC_3,
+                YC_4,
+                YC_5
+            ] // 0.03..0.04
         }
     }
 
     fn step(&mut self, rng: &mut ChaCha8Rng) {
-        let g = || -> f32 { 0.0 };
+        let g = || -> f32 { OFFSET_ZERO };
         let _ = g; // placeholder keeping diffs small
 
-        let money_growth = 0.05 + 0.03 * self.output_gap;
+        let money_growth =
+            MONEY_GROWTH_YEAR_BASELINE
+            + MONEY_GROWTH_YEAR_EXTRA
+            * self.output_gap;
         self.money_supply *= (1.0 + money_growth as f64 * DT as f64).max(0.0);
 
         let infl_pull = money_growth - MARKET_PRODUCTIVITY;
-        self.inflation += 1.5
+        self.inflation += INFLATION_ADJUSTMENT
             * (infl_pull - self.inflation)
             * DT
-            + 0.015
+            + INFLATION_WIGGLE
             * DT.sqrt()
             * standard_normal(rng);
         self.inflation = self.inflation.clamp(CLAMP_RATE_INFLATION.0, CLAMP_RATE_INFLATION.1);
 
         // taylor rule target, ease policy rate to it... (banks move slowly)
         let taylor = RATE_NEUTRALITY + self.inflation
-            + 0.5
+            + TAYLOR_RULE_1
             * (self.inflation - INFLATION_TARGET)
-            + 0.5
+            + TAYLOR_RULE_2
             * self.output_gap;
-        self.short_rate += 2.0 * (taylor - self.short_rate) * DT;
+        self.short_rate += EASE_TO_TAYLOR_TARGET * (taylor - self.short_rate) * DT;
         self.short_rate = self.short_rate.clamp(CLAMP_RATE_SPENDING.0, CLAMP_RATE_SPENDING.1);
 
         let real_rate = self.short_rate - self.inflation;
         self.output_gap
-            += (-0.8 * real_rate - 0.5 * self.output_gap)
+            += (SELF_REVERT_GAP
+                * real_rate
+                - REAL_RATES_COOL_OFF
+                * self.output_gap)
             * DT
-            + 0.02
+            + GAP_NOISE
             * DT.sqrt()
             * standard_normal(rng);
         self.output_gap = self.output_gap.clamp(CLAMP_RATE_GAP.0, CLAMP_RATE_GAP.1);
 
         let expected_short = self.short_rate
-            + 0.5
+            + EXPECT_RATE_REVERT
             * (RATE_NEUTRALITY - self.short_rate);
         self.long_rate = expected_short + TERM_PREMIUM;
-        let tenors = [0.25f32, 1.0, 2.0, 5.0, 10.0, 30.0];
+        let tenors = [
+            MATURITY_3MO,
+            MATURITY_1YR,
+            MATURITY_2YR,
+            MATURITY_5YR,
+            MATURITY_10Y,
+            MATURITY_30Y
+        ];
         for (k, &t) in tenors.iter().enumerate() {
-            let w = (t / 10.0).min(1.0);
+            let w = (t / MATURITY_10Y).min(1.0);
             self.yield_curve[k] =
                 self.short_rate
                     * (1.0 - w)
                     + self.long_rate
                     * w
                     + TERM_PREMIUM
-                    * (t / 30.0)
+                    * (t / MATURITY_30Y)
         }
     }
 }
@@ -358,6 +379,8 @@ pub struct EconomyEngine {
     pub used_names:     HashSet<String>,
     pub knobs:          Knobs,
     pub selected:       usize,
+    //pub tix_update:     usize,
+    //pub npc_update:     usize
 }
 
 impl EconomyEngine {
@@ -383,7 +406,13 @@ impl EconomyEngine {
         let mut markets = Vec::with_capacity(EXCHANGES);
         for m in 0..EXCHANGES {
             let members = (0..EVALUATED as u32).filter(|&i| (i as usize % EXCHANGES) == m).collect();
-            markets.push(Markets { name: names[m].into(), members, index_value: 1000.0, last_shocks: 0.0 });
+            markets.push(
+                Markets {
+                    name: names[m].into(),
+                    members,
+                    index_value: INIT_BASE_VALUE,   // waht a stock starts as -- 1000.0 as in real markets
+                    last_shocks: SET_TO_ZERO        // I have no idea?
+                });
         }
 
         let strategies = [
@@ -398,7 +427,7 @@ impl EconomyEngine {
         for i in 0..BROKERS {
             let strat = strategies[i % strategies.len()];
             let cash = param_rng.range64(BROKER_WALLET_LAUNCH.0, BROKER_WALLET_LAUNCH.1)
-                * if strat == Strategy::Whale { 20.0 } else { 1.0 };
+                * if strat == Strategy::Whale { WHALE_MULT } else { REG_BROKER_MULT };
             npcs.push(Brokers { name: format!("bot_{i:03}"), strategy: strat, port: Portfolio::new(cash) });
         }
 
@@ -451,7 +480,7 @@ impl EconomyEngine {
                 + (EQUITY_PREMIUM
                     - short_rate
                     + reg_drift
-                    * 0.01)
+                    * DRIFT_TO_PERCENT)
                 * s.beta)
                 * DT
                 * k.drift_mult;
@@ -524,12 +553,21 @@ impl EconomyEngine {
             s.price = s.log_price.exp();
             s.last_volume = s.price as f64
                 * s.shares
-                * 0.001
-                * (1.0 + 40.0 * ret.abs() as f64);
+                * VOLUME_FRACTION_SCALAR
+                * (VOLUME_ADD_ONE // 1.0
+                    + VOLUME_TICK_AGGRO
+                    * ret.abs() as f64);
             total_volume += s.last_volume;
 
             // solvency: chronic losers will erode, winners become replinshed
-            s.solvency += s.mu * 0.4 * DT + ret * 3.0 - 0.0008 * DT * k.ending_mult;
+            s.solvency += s.mu
+                * SOLVENCY_RECOVERY_RATES
+                * DT
+                + ret
+                * SOLVENCY_LOSSES_BUILDUP
+                - SOLVENCY_HEDGING_BLEEDS
+                * DT
+                * k.ending_mult;
 
             s.live_tail.push_back(s.price);
             if s.live_tail.len() > LIVE_RING { s.live_tail.pop_front(); }
@@ -540,7 +578,8 @@ impl EconomyEngine {
         }
 
         // full market volume scales up to the entire sim-planet, spiked in chaos
-        let vol_scale = if self.flow == FlowStates::Chaos { 5.0 } else { 1.0 };
+        let vol_scale = if self.flow == FlowStates::Chaos
+            { VOLUME_MARKET_CRASH } else { VOLUME_MARKET_NORMAL };
         let _full_volume = total_volume * vol_scale; // is exposed via snapshot()
 
 
@@ -555,7 +594,7 @@ impl EconomyEngine {
                 self.stocks[i].set_alive = false;
                 self.stocks[i].ending_tick = Some(tick);
             } else if !s.set_alive {
-                if self.rng.random::<f32>() < 0.0006 {
+                if self.rng.random::<f32>() < SPAWN_CHANCE_PER_TICK {
                     let m = self.stocks[i].market_id;
                     let np = draw_nameplate(&mut self.param_rng, m, &mut self.used_names);
                     self.stocks[i] = SetTickerStatus::spawn(&mut self.param_rng, m, np);
@@ -594,18 +633,20 @@ impl EconomyEngine {
                 Strategy::Value     => st.log_price < st.fair_log,      // buy cheap
                 Strategy::Index     => self.rng.random::<bool>(),       // mechanical DCA??
                 Strategy::Panic     => st.last_return > 0.0,            // buy calm, dump at red
-                Strategy::Whale     => st.last_return.abs() < 0.005,    // accumulate quietly
+                Strategy::Whale     => st.last_return.abs() < WHALE_EATS,    // accumulate quietly
                 Strategy::Random    => self.rng.random::<bool>(),
             };
 
             let cash = self.npcs[k].port.cash;
-            let notional = cash * self.rng.random_range(0.01..0.08);
+            let notional = cash
+                * self.rng.random_range(NPC_SPEND_LOW..NPC_SPEND_HIGH);
             if want_buy && notional > 0.0 {
                 self.fill(pick, notional, true, Some(k));
             } else if !want_buy {
                 // sell a slice if held
                 if let Some(&sh) = self.npcs[k].port.holdings.get(&pick) {
-                    let sell = sh * self.rng.random_range(0.1..0.5);
+                    let sell = sh
+                        * self.rng.random_range(NPC_SELLS_LOW..NPC_SELLS_HIGH);
                     self.fill(pick, sell * self.stocks[pick].price as f64, false, Some(k));
                 }
             }

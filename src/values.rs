@@ -2,7 +2,7 @@ use eframe::egui::Color32;
 
 //pub const EVALUATED:                usize = (1 << 13) - 1;
 //pub const EVALUATED:                usize = 2;
-pub const EVALUATED:                usize = (1 << 10) - 1;
+pub const EVALUATED:                usize = (1 << 8) - 1;
 //pub const EVALUATED:                usize = (1 << 11) - 256;
 pub const EXCHANGES:                usize = 4;
 
@@ -10,9 +10,12 @@ pub const EXCHANGES:                usize = 4;
 pub const DAYS_YEAR:                u64 = 384; // 256
 pub const TICKS_DAY:                u64 = 256; // 64
 //pub const TICKS_DAY:                u64 = 16;  // 64
-pub const DT:                       f32 = 1.0 / 98304.0; // = 1 / (384 * 64) ??
+pub const DT:                       f32 = 1.0 / (DAYS_YEAR * TICKS_DAY) as f32; // = 1 / (384 * 64) ??
+//pub const DT:                       f32 = 1.0 / 98304.0; // = 1 / (384 * 64) ??
 //pub const DT:                       f32 = 1.0 / 16384.0; // = 1 / (252 * 64) ??
 //pub const DT:                       f32 = 1.0 / 2016.0; // = 1 / (252 * 8) ??
+pub const STOCK_UPDATE_SIZE:        f32 = EVALUATED as f32 / 64.0;
+pub const BROKER_UPDATE_SIZE:       f32 = BROKERS as f32 / 4.0;
 
 
 pub const DAYS_TRADING:             u64 = 5; // 3
@@ -20,7 +23,7 @@ pub const DAYS_REST:                u64 = 2; // 1
 pub const LENGTH_WEEK:              u64 = DAYS_TRADING + DAYS_REST;
 
 
-pub const PREHEAT_YEARS:            f64 = 0.022223;
+pub const PREHEAT_YEARS:            f64 = 0.011112;
 pub const PREHEAT_TICKS:            f64 = PREHEAT_YEARS * DAYS_YEAR as f64 * TICKS_DAY as f64;
 pub const DAYS_HISTOGRAPH:          usize = 1280;
 pub const LIVE_RING:                usize = 1024;
@@ -96,13 +99,23 @@ pub const NAMEPLATE_VOWELS:         &str = "AEIOUY";
 //pub const NAMEPLATE_ALPHABET:       &str = "ABCDEFGHIKLMNPRSTVXYZ23456789"; // remove j, o, q, u, w, 0, 1
 pub const NAMEPLATE_LENGTHS:        [usize; EXCHANGES] = [3, 4, 4, 4]; // per market preference
 
-
+pub const WINDOW_SCALE_WIDTHS:      f32 = 1810.0;
+pub const WINDOW_SCALE_HEIGHT:      f32 = 920.0;
 pub const PLOT_ASPECT_RATIO:        f32 = 3.111;
 pub const PRESET_MAX_QUEUE:         usize = 3;
 pub const FORCE_SNAPSHOT_MS:        u64 = 59;
 //pub const FORCE_SNAPSHOT_MS:        f64 = 59.998;
 pub const STEP_BUDGET_MS:           u64 = 16;
 //pub const STEP_BUDGET_MS:           f64 = 16.667;
+pub const COUNT_CHIRON:             usize = 48;
+pub const CELL_CHIRON:              f32 = 81.0;
+pub const TALL_CHIRON:              f32 = 16.0;
+//pub const CELL_CRAWLS:              f32 = 31.4159;
+pub const CELL_CRAWLS:              f32 = 15.7142;
+pub const MARKET_NAMES_X:           f32 = 48.0;
+pub const MARKET_NAMES_Y:           f32 = 16.0;
+pub const FONT_CHIRON:              f32 = 12.0;
+
 
 
 pub const QUOTIENT_HIGH:            u64 = 0xF987_E789_D987_C789;
@@ -118,34 +131,29 @@ pub const COLOR_DOWNWARDS: Color32 = Color32::from_rgb(234, 77, 66);
 pub const SPLIT_MIX_HIGH:           u64 = 0xE198_C891_E198_C891;
 //pub const SPLIT_MIX_HIGH:           u64 = 0xDEAD_BEEF_CAFE_F00D;
 
-//pub const NEXT_U64:                 u64 = 0x517C_C1B7_2722_0A95; // high-entropy odd number, purely arbitrary
+pub const NEXT_U64:                 u64 = 0x517C_C1B7_2722_0A95; // high-entropy odd number, purely arbitrary
 //pub const NEXT_U64:                 u64 = 0x98AB_87BC_76CD_65DE;
-pub const NEXT_U64:                 u64 = 0x9E37_79B9_7F4A_7C15; // <- [sqrt(5) - 1 / 2] 'golden ratio mean'
+//pub const NEXT_U64:                 u64 = 0x9E37_79B9_7F4A_7C15; // <- [sqrt(5) - 1 / 2] 'golden ratio mean'
 
-//pub const Z_STEP_1:                 u64 = 0x9E37_79B1_85EB_CA87; // xxHash tweaked Golden Ratio as odd value
+pub const Z_STEP_1:                 u64 = 0x9E37_79B1_85EB_CA87; // xxHash tweaked Golden Ratio as odd value
 //pub const Z_STEP_1:                 u64 = 0xAC77_BE55_CA33_EC11; <- my dumb val
-pub const Z_STEP_1:                 u64 = 0xBF58_476D_1CE4_E5B9;
+//pub const Z_STEP_1:                 u64 = 0xBF58_476D_1CE4_E5B9;
 
-//pub const Z_STEP_2:                 u64 = 0xC2B2_AE3D_27D4_EB4F; // xxHash second mult...
+pub const Z_STEP_2:                 u64 = 0xC2B2_AE3D_27D4_EB4F; // xxHash second mult...
 //pub const Z_STEP_2:                 u64 = 0x6667_981A_BCDE_F198; <- my dumb val
-pub const Z_STEP_2:                 u64 = 0x94D0_49BB_1331_11EB;
+//pub const Z_STEP_2:                 u64 = 0x94D0_49BB_1331_11EB;
 
-//pub const BIT_SHIFT_1:              u64 = 31; // xxHash
-pub const BIT_SHIFT_1:              u64 = 30; // used in SplitMix64 by Vigno for his consts
-//pub const BIT_SHIFT_2:              u64 = 33; // xxHash
-pub const BIT_SHIFT_2:              u64 = 27;
-//pub const BIT_SHIFT_3:              u64 = 33; // xxHash
-pub const BIT_SHIFT_3:              u64 = 31;
+pub const BIT_SHIFT_1:              u64 = 31; // xxHash
+//pub const BIT_SHIFT_1:              u64 = 30; // used in SplitMix64 by Vigno for his consts
+pub const BIT_SHIFT_2:              u64 = 33; // xxHash
+//pub const BIT_SHIFT_2:              u64 = 27;
+pub const BIT_SHIFT_3:              u64 = 33; // xxHash
+//pub const BIT_SHIFT_3:              u64 = 31;
 
 
-//pub const SCRAMBLING_SALT:            u64 = 0xB7E1_5162_8AED_2A6B;
-pub const SCRAMBLING_SALT:          u64 = 0xA5A5_5A5A_F0F0_0F0F;
+pub const SCRAMBLING_SALT:            u64 = 0xB7E1_5162_8AED_2A6B;
+//pub const SCRAMBLING_SALT:          u64 = 0xA5A5_5A5A_F0F0_0F0F;
 
 
 /*pub const : = ;
 pub const : = ;*/
-
-
-
-pub const WINDOW_SCALE_WIDTHS: f32 = 1810.0;
-pub const WINDOW_SCALE_HEIGHT: f32 = 920.0;

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 crossbeam-channel = "0.5.15"
 eframe = "0.30"
+egui_extras = "0.35.0"
 egui_plot = "0.30"
 #egui_plot = "0.35.0"
 #egui_plot = "0.36.0"
