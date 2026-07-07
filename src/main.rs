@@ -399,6 +399,9 @@ impl eframe::App for MarketDynamo {
                     if ui.button("casino").clicked() { self.knobs = Knobs::casino(); changed = true; }
                     if ui.button("default").clicked() { self.knobs = Knobs::default(); changed = true; }
                     if changed { let _ = self.tx.send(SimulatorCommands::SetKnobs(self.knobs)); }
+                    if ui.button("X").clicked() {
+                        std::process::exit(0);
+                    }
                 });
             }
         });
@@ -496,7 +499,7 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([WINDOW_SCALE_WIDTHS, WINDOW_SCALE_HEIGHT])
             .with_decorations(true)
-            .with_resizable(false),
+            .with_resizable(true),
         ..Default::default()
     };
     eframe::run_native("T1XR", native, Box::new(move |_cc| {

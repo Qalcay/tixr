@@ -29,12 +29,12 @@ impl Default for Knobs {
 impl Knobs {
     pub fn sliders(&mut self) -> [(&'static str, &mut f32, f32, f32); 8] {
         [
-            (" speed=",          &mut self.speed,            0.01, 800.0),
+            (" speed=",         &mut self.speed,            0.01, 800.0),
             (" volume=",        &mut self.vol_mult,         0.0, 100.0),
             (" jumps=",         &mut self.jump_mult,        0.0, 16.0),
-            (" drifting=",      &mut self.drift_mult,      -1.0, 16.0),
-            (" dumping=",       &mut self.crash_mult,       0.5, 16.0),
-            (" defunct=",       &mut self.ending_mult,      0.0, 16.0),
+            (" drifts=",        &mut self.drift_mult,      -1.0, 16.0),
+            (" dumps=",         &mut self.crash_mult,       0.5, 16.0),
+            (" defuncts=",      &mut self.ending_mult,      0.0, 16.0),
             (" zeal=",          &mut self.broker_aggro,     0.0, 64.0),
             (" liquid=",        &mut self.impact_mult,      0.0, 128.0),
         ]
