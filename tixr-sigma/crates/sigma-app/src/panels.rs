@@ -128,16 +128,18 @@ fn persona_label(ui: &mut Ui, persona: sigma_engine::persona::Persona) {
     }
 }
 
-pub fn detail(app: &mut App, ui: &mut Ui) {
+/// `reserve` keeps that many pixels free below the detail view (the
+/// Terminal layout puts the market feed there).
+pub fn detail(app: &mut App, ui: &mut Ui, reserve: f32) {
     let Some(snap) = app.snap.take() else {
         ui.centered_and_justified(|ui| ui.label("Starting engine..."));
         return;
     };
-    detail_inner(app, ui, &snap);
+    detail_inner(app, ui, &snap, reserve);
     app.snap = Some(snap);
 }
 
-fn detail_inner(app: &mut App, ui: &mut Ui, snap: &sigma_engine::Snapshot) {
+fn detail_inner(app: &mut App, ui: &mut Ui, snap: &sigma_engine::Snapshot, reserve: f32) {
     let pal = app.settings.theme.palette();
     let Some(d) = &snap.detail else {
         ui.vertical_centered(|ui| {
@@ -203,7 +205,7 @@ fn detail_inner(app: &mut App, ui: &mut Ui, snap: &sigma_engine::Snapshot) {
         ui.checkbox(&mut app.settings.show_forecast, "forecast cone");
         ui.label(RichText::new("dashed: fair value / mean forecast; bands: 68% and 95%").small().color(pal.text_weak));
     });
-    let chart_h = (ui.available_height() - 64.0).max(120.0);
+    let chart_h = (ui.available_height() - 64.0 - reserve).max(120.0);
     chart::price_chart(ui, vec2(ui.available_width(), chart_h), d, app.chart_range, app.settings.show_forecast, &pal);
 
     ui.horizontal(|ui| {
@@ -345,7 +347,7 @@ pub fn population(app: &App, ui: &mut Ui) {
         kv(
             ui,
             "Engine",
-            format!("{} ev/s, density {:.3}", format::compact(snap.events_per_real_sec, 0), snap.tick_density),
+            format!("{} ev/s, d{:.2}", format::compact(snap.events_per_real_sec, 0), snap.tick_density),
             "Events processed per real second, and the print-rate multiplier the engine chose to stay within budget.",
         );
     });

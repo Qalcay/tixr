@@ -21,6 +21,11 @@ codegen-units = 1
 debug = false
 strip = "debuginfo"
 
+# Line tables are enough for readable backtraces and much smaller than full
+# debug info.
+[profile.dev]
+debug = "line-tables-only"
+
 # Debug builds of the engine are painfully slow for a simulator; optimise the
 # engine even in dev so `cargo run` is usable while the app stays debuggable.
 [profile.dev.package.sigma-engine]

@@ -15,9 +15,13 @@ sigma-engine = { path = "../sigma-engine" }
 # OpenGL (glow) backend instead of the default wgpu backend, and no
 # accesskit/system-font/link features. This is where the original's 1-2 GB
 # target/ directory came from.
-eframe = { version = "0.37", default-features = false, features = [
-    "glow",
-    "default_fonts",
-    "x11",
-    "wayland",
-] }
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts"] }
+
+# Linux windowing back-ends. Both are on by default; X11 alone also works on
+# Wayland desktops (via XWayland) and is noticeably smaller to build:
+#   cargo build --release -p sigma-app --no-default-features --features x11
+# On Windows and macOS these features compile to nothing.
+[features]
+default = ["x11", "wayland"]
+x11 = ["eframe/x11"]
+wayland = ["eframe/wayland"]

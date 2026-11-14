@@ -421,7 +421,7 @@ impl eframe::App for App {
                     .resizable(false)
                     .show(ui, |ui| panels::security_list(self, ui));
                 egui::Panel::bottom("dock").exact_size(236.0).resizable(false).show(ui, |ui| panels::dock(self, ui));
-                egui::CentralPanel::default().show(ui, |ui| panels::detail(self, ui));
+                egui::CentralPanel::default().show(ui, |ui| panels::detail(self, ui, 0.0));
             }
             LayoutKind::Terminal => {
                 egui::Panel::bottom("ticker")
@@ -436,7 +436,7 @@ impl eframe::App for App {
                     .resizable(false)
                     .show(ui, |ui| panels::security_list(self, ui));
                 egui::CentralPanel::default().show(ui, |ui| {
-                    panels::detail(self, ui);
+                    panels::detail(self, ui, 170.0);
                     ui.separator();
                     panels::feed(self, ui, 140.0);
                 });
