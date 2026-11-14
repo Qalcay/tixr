@@ -1,0 +1,23 @@
+[package]
+name = "sigma-app"
+description = "egui front-end for Tixr-sigma"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tixr-sigma"
+path = "src/main.rs"
+
+[dependencies]
+sigma-engine = { path = "../sigma-engine" }
+# OpenGL (glow) backend instead of the default wgpu backend, and no
+# accesskit/system-font/link features. This is where the original's 1-2 GB
+# target/ directory came from.
+eframe = { version = "0.37", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
