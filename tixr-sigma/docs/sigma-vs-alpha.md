@@ -122,7 +122,18 @@ The 1-2 GB `target/` directory came mostly from eframe's default **wgpu** backen
 * `sigma-app`: `eframe` with `default-features = false` and only `glow` (OpenGL), `default_fonts`, `x11` and `wayland`. Charts are drawn with egui's `Painter` instead of `egui_plot`.
 * Workspace profiles drop debug info for third-party crates in dev builds.
 
-The measured sizes are in the pull request description and the README.
+Measured on Linux x86-64 with clean target directories (Rust 1.97):
+
+| | Alpha | Sigma (default) | Sigma (`--no-default-features --features x11`) |
+|---|---|---|---|
+| Crates in the dependency graph | 345 | 151 | 124 |
+| Crates when targeting Windows | 207 | 107 | 107 |
+| `target/` after `cargo build` | **2.5 GB** (230 s) | **560 MB** (90 s) | 485 MB (76 s) |
+| `target/` after dev + release builds | 3.3 GB | 1.1 GB | n/a |
+| Release binary | 13.0 MB | 10.4 MB | n/a |
+| Engine crate alone | n/a | 23 MB (2 s) | n/a |
+
+What remains is mostly egui/winit and the platform windowing stack, which any native GUI needs. Going much lower would mean a different GUI toolkit, or a terminal UI over the same engine.
 
 ---
 
