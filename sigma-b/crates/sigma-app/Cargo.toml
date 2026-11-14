@@ -1,0 +1,21 @@
+[package]
+name = "sigma-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "tixr-sigma"
+path = "src/main.rs"
+
+[dependencies]
+sigma-core = { path = "../sigma-core" }
+# No wgpu (eframe's new default renderer, by far the heaviest part), no
+# accesskit, no system font scanning: OpenGL via glow plus bundled fonts.
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts"] }
+
+[features]
+# Linux window systems. Build with `--no-default-features --features x11`
+# (or `wayland`) to compile only the one you use. Ignored on Windows/macOS.
+default = ["x11", "wayland"]
+x11 = ["eframe/x11"]
+wayland = ["eframe/wayland"]

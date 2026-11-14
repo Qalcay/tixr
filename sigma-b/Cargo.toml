@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/sigma-core", "crates/sigma-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true # drop symbols from the shipped binary
+
+# Debug builds: most of a debug `target/` is debug info for dependencies
+# (window system bindings, fonts, egui). We never step into those, so:
+# * our own crates keep line tables (enough for backtraces),
+# * dependencies get no debug info but are optimised, so egui stays fast.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
