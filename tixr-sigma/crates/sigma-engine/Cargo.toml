@@ -1,0 +1,15 @@
+[package]
+name = "sigma-engine"
+description = "Event-driven market simulation core for Tixr-sigma (no third-party deps)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Intentionally empty. RNG, scheduling and maths are hand-rolled and tested.
+
+[features]
+# Development-only time controls (speed multiplier, closed-hours boost) in
+# release builds. Without it a release build is time-locked at 1x.
+dev-time = []
