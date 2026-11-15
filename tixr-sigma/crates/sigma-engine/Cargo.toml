@@ -8,3 +8,8 @@ license.workspace = true
 
 [dependencies]
 # Intentionally empty. RNG, scheduling and maths are hand-rolled and tested.
+
+[features]
+# Development-only time controls (speed multiplier, closed-hours boost) in
+# release builds. Without it a release build is time-locked at 1x.
+dev-time = []

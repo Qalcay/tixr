@@ -25,3 +25,5 @@ eframe = { version = "0.37", default-features = false, features = ["glow", "defa
 default = ["x11", "wayland"]
 x11 = ["eframe/x11"]
 wayland = ["eframe/wayland"]
+# Development-only speed controls in a release build (see sigma-engine).
+dev-time = ["sigma-engine/dev-time"]

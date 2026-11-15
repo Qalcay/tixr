@@ -12,7 +12,12 @@ fn main() {
     let seed: u64 = args.next().and_then(|a| a.parse().ok()).unwrap_or(1);
     console::set_level(Level::Warn);
     let started = std::time::Instant::now();
-    let mut e = Engine::new(EngineConfig { seed, warmup: std::env::var("NOWARM").is_err(), ..Default::default() });
+    let mut config = EngineConfig { seed, warmup: std::env::var("NOWARM").is_err(), ..Default::default() };
+    if let Some(n) = std::env::var("BROKERS").ok().and_then(|v| v.parse::<usize>().ok()) {
+        config.brokers = n * 85 / 100;
+        config.firms = n - config.brokers;
+    }
+    let mut e = Engine::new(config);
     eprintln!(
         "init {:.2}s events {} ticks {} trades {}",
         started.elapsed().as_secs_f64(),
@@ -33,10 +38,7 @@ fn main() {
                 e.stats.closed_ticks,
                 e.stats.broker_decisions,
                 e.stats.trades,
-                (0..256u16)
-                    .filter_map(|s| e.broker(sigma_engine::broker::BrokerId::new(s, 0)))
-                    .map(|b| b.port.positions.len())
-                    .sum::<usize>()
+                e.brokers().map(|b| b.port.positions.len()).sum::<usize>()
             );
         }
         if d % 50 == 0 || d == days {
@@ -44,7 +46,7 @@ fn main() {
             let idx: Vec<String> = e.exchanges.iter().map(|x| format!("{:.0}", x.index_level())).collect();
             let max_price = e.live_ids().map(|id| e.security(id).unwrap().price).fold(0.0, f64::max);
             println!(
-                "day {d:5} live {:6} K {:6.0} ipo {:5} bk {:4} penny {:4} acq {:4} splits {:3} | brokers {:3} broke {:3} | {:<10} 3M {:5.2}% 10Y {:5.2}% pi {:5.2}% | idx {} | max px {:.0} | {}",
+                "day {d:5} live {:6} K {:6.0} ipo {:5} bk {:4} penny {:4} acq {:4} splits {:3} | brokers {:5} firms {:4} broke {:4} rescues {:3} | {:<10} 3M {:5.2}% 10Y {:5.2}% pi {:5.2}% | idx {} | max px {:.0} | {}",
                 e.live_count(),
                 e.carrying_capacity,
                 s.ipos,
@@ -52,8 +54,10 @@ fn main() {
                 s.penny_delistings,
                 s.acquisitions,
                 s.splits,
-                e.brokers_alive(),
+                e.brokers_alive() - e.firms_alive(),
+                e.firms_alive(),
                 s.brokers_broke,
+                s.rescues,
                 e.regime().label(),
                 e.macro_state.curve.yield_at(0.25) * 100.0,
                 e.macro_state.y10() * 100.0,

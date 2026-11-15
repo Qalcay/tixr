@@ -72,6 +72,20 @@ pub fn shares(v: f64) -> String {
     if v.abs() < 10_000.0 { format!("{v:.1}") } else { compact(v, 2) }
 }
 
+/// "3 min ago" style age of a file.
+pub fn age(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    if s < 90 {
+        "just now".to_string()
+    } else if s < 2 * 3_600 {
+        format!("{} min ago", s / 60)
+    } else if s < 2 * 86_400 {
+        format!("{} h ago", s / 3_600)
+    } else {
+        format!("{} days ago", s / 86_400)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

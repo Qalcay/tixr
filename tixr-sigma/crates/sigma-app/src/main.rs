@@ -23,15 +23,17 @@ mod windows;
 
 use eframe::egui;
 use sigma_engine::console::{self, ALL_LEVELS, Level};
-use sigma_engine::{EngineConfig, protocol::Command};
+use sigma_engine::{EngineConfig, RunnerOptions, protocol::Command};
 
 struct Args {
     config: EngineConfig,
+    runner: RunnerOptions,
     log: Level,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut config = EngineConfig::default();
+    let mut runner = RunnerOptions { autosave_on_exit: true, ..Default::default() };
     let mut log = Level::Info;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -42,18 +44,24 @@ fn parse_args() -> Result<Args, String> {
                 config.initial_securities =
                     value("--securities")?.parse().map_err(|_| "securities must be an integer")?
             }
+            "--save-dir" => runner.save_root = value("--save-dir")?.into(),
+            "--load" => runner.load_slot = Some(value("--load")?),
+            "--no-autosave" => runner.autosave_on_exit = false,
             "--log" => {
                 let v = value("--log")?;
                 log = ALL_LEVELS.into_iter().find(|l| l.label() == v).ok_or(format!("unknown log level {v}"))?;
             }
             "-h" | "--help" => {
-                println!("tixr-sigma [--seed N] [--securities N] [--log off|warn|info|debug|trace]");
+                println!(
+                    "tixr-sigma [--seed N] [--securities N] [--save-dir DIR] [--load SLOT] [--no-autosave] \\
+                     [--log off|warn|info|debug|trace]"
+                );
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument {other} (try --help)")),
         }
     }
-    Ok(Args { config, log })
+    Ok(Args { config, runner, log })
 }
 
 fn main() -> eframe::Result<()> {
@@ -74,17 +82,17 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([1100.0, 680.0]),
         ..Default::default()
     };
-    let config = args.config;
-    let log = args.log;
+    let Args { config, runner, log } = args;
+    let save_root = runner.save_root.clone();
     eframe::run_native(
         "Tixr-sigma",
         options,
         Box::new(move |cc| {
             // Hand the engine a way to wake the UI when a snapshot lands.
             let ctx = cc.egui_ctx.clone();
-            let handle = sigma_engine::spawn(config, move || ctx.request_repaint());
+            let handle = sigma_engine::spawn(config, runner, move || ctx.request_repaint());
             handle.send(Command::SetLogLevel(log));
-            Ok(Box::new(app::App::new(handle)))
+            Ok(Box::new(app::App::new(handle, save_root)))
         }),
     )
 }

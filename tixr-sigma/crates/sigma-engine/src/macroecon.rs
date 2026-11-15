@@ -151,7 +151,22 @@ pub struct MacroState {
     pub regime: Regime,
     pub regime_days: u32,
     pub curve: YieldCurve,
+    /// Business-cycle factor: the running integral of the output gap, in
+    /// gap-years. Securities with a cycle exposure (the Finance perk) drift
+    /// up while the economy runs hot and down in recessions.
+    pub cycle_index: f64,
+    /// Recovery factor: climbs at [`RECOVERY_RATE`] while a post-stress
+    /// recovery window is open, flat otherwise (the Profit perk loads on it).
+    pub recovery_index: f64,
+    /// Sim days left in the current recovery window.
+    pub recovery_days_left: u32,
 }
+
+/// Annual climb of the recovery factor while a recovery window is open.
+pub const RECOVERY_RATE: f64 = 0.15;
+/// Recovery window opened when a Crisis / a Correction gives way to calm.
+pub const RECOVERY_DAYS_AFTER_CRISIS: u32 = 300;
+pub const RECOVERY_DAYS_AFTER_CORRECTION: u32 = 90;
 
 /// Exact Ornstein-Uhlenbeck step: valid for any `dt`, never overshoots.
 #[inline]
@@ -175,6 +190,9 @@ impl MacroState {
             regime: Regime::Calm,
             regime_days: 0,
             curve: YieldCurve { level: 0.0, slope: 0.0, curvature: 0.0, lambda: 1.6 },
+            cycle_index: 0.0,
+            recovery_index: 0.0,
+            recovery_days_left: 0,
         };
         m.rebuild_curve();
         m
@@ -246,6 +264,12 @@ impl MacroState {
         let m_growth = TREND_GROWTH + self.inflation + 0.8 * (neutral_nominal - self.policy_rate);
         self.log_money += m_growth * dt;
 
+        // Slow factors used by perks (see the field docs).
+        self.cycle_index += self.output_gap * dt;
+        if self.recovery_days_left > 0 {
+            self.recovery_index += RECOVERY_RATE * dt;
+        }
+
         self.rebuild_curve();
     }
 
@@ -275,12 +299,22 @@ impl MacroState {
         for (p, dest) in moves {
             acc += p;
             if u < acc && dest != self.regime {
+                // Stress giving way to calm opens a recovery window.
+                if matches!(dest, Calm | Bull) {
+                    let window = match self.regime {
+                        Crisis => RECOVERY_DAYS_AFTER_CRISIS,
+                        Correction => RECOVERY_DAYS_AFTER_CORRECTION,
+                        _ => 0,
+                    };
+                    self.recovery_days_left = self.recovery_days_left.max(window);
+                }
                 self.regime = dest;
                 self.regime_days = 0;
                 return Some(dest);
             }
         }
         self.regime_days += 1;
+        self.recovery_days_left = self.recovery_days_left.saturating_sub(1);
         None
     }
 }
@@ -290,6 +324,25 @@ impl Default for MacroState {
         Self::new()
     }
 }
+
+crate::tag_enum!(Regime { Calm = 0, Bull = 1, Correction = 2, Crisis = 3 });
+crate::record!(YieldCurve { level, slope, curvature, lambda });
+crate::record!(MacroState {
+    output_gap,
+    inflation,
+    policy_rate,
+    term_premium,
+    curvature,
+    erp,
+    credit_spread,
+    log_money,
+    regime,
+    regime_days,
+    curve,
+    cycle_index,
+    recovery_index,
+    recovery_days_left,
+});
 
 #[cfg(test)]
 mod tests {

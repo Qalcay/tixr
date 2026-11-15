@@ -12,15 +12,17 @@
 //! changes the layout. Two layouts are offered from the View menu.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 
 use eframe::egui::{self, FontId, RichText};
 use sigma_engine::EngineHandle;
 use sigma_engine::console::Level;
+use sigma_engine::history::ChartRange;
 use sigma_engine::protocol::{Command, Notice, OrderSize, Row, Side, Snapshot};
+use sigma_engine::save::{self, SlotInfo};
 use sigma_engine::security::SecurityId;
 use sigma_engine::time::REAL_SECS_PER_SIM_DAY;
 
-use crate::chart::ChartRange;
 use crate::format;
 use crate::panels;
 use crate::theme::Theme;
@@ -68,7 +70,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             speed: 1.0,
-            closed_boost: true,
+            closed_boost: false,
             ticker_step: 1,
             ticker_rows: 4,
             theme: Theme::Dark,
@@ -84,6 +86,7 @@ impl Default for Settings {
 pub struct OpenWindows {
     pub brokers: bool,
     pub personal: bool,
+    pub financials: bool,
     pub settings: bool,
 }
 
@@ -118,6 +121,12 @@ pub struct App {
     pub brokers_ui: windows::brokers::BrokersUi,
     pub personal_ui: windows::personal::PersonalUi,
     pub settings_ui: windows::settings::SettingsUi,
+    pub financials_ui: windows::financials::FinancialsUi,
+    /// Directory holding the save slots (one sub-directory each).
+    save_root: PathBuf,
+    save_slot: String,
+    /// Slots on disk, re-read each time the Game menu is opened.
+    slots: Vec<SlotInfo>,
     crawls: [Crawl; 4],
     crawl_cursor: [usize; 4],
     /// Per exchange: row indices of its 48 largest listings (ticker content).
@@ -126,7 +135,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(engine: EngineHandle) -> Self {
+    pub fn new(engine: EngineHandle, save_root: PathBuf) -> Self {
         Self {
             engine,
             snap: None,
@@ -140,12 +149,16 @@ impl App {
             sort_desc: true,
             view: Vec::new(),
             view_dirty: true,
-            chart_range: ChartRange::Quarter,
+            chart_range: ChartRange::Month,
             ticket: OrderTicket { amount: 10_000.0, by_notional: true },
             windows: OpenWindows::default(),
             brokers_ui: Default::default(),
             personal_ui: Default::default(),
             settings_ui: Default::default(),
+            financials_ui: Default::default(),
+            save_root,
+            save_slot: "slot1".to_string(),
+            slots: Vec::new(),
             crawls: Default::default(),
             crawl_cursor: [0; 4],
             crawl_lists: Default::default(),
@@ -264,20 +277,50 @@ impl App {
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
+            let game = ui.menu_button("Game", |ui| {
                 if ui.button("New market (random seed)").clicked() {
-                    let seed = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64)
-                        .unwrap_or(1);
-                    self.send(Command::Restart { seed });
+                    self.send(Command::Restart { seed: save::fresh_seed() });
                     self.selected = None;
                     ui.close();
                 }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Slot");
+                    ui.add(egui::TextEdit::singleline(&mut self.save_slot).desired_width(110.0).char_limit(32));
+                    let valid = save::slot_dir(&self.save_root, &self.save_slot).is_ok();
+                    if ui.add_enabled(valid, egui::Button::new("Save")).clicked() {
+                        self.send(Command::Save { slot: self.save_slot.clone() });
+                        ui.close();
+                    }
+                });
+                ui.label(RichText::new("Load").weak());
+                if self.slots.is_empty() {
+                    ui.label(RichText::new("no saved games yet").small());
+                }
+                let mut load = None;
+                for slot in &self.slots {
+                    let size_mb = (slot.state_bytes + slot.history_bytes) as f64 / 1e6;
+                    let age = slot.modified.and_then(|t| t.elapsed().ok()).map(format::age).unwrap_or_default();
+                    if ui.button(format!("{}  ({size_mb:.1} MB, {age})", slot.name)).clicked() {
+                        load = Some(slot.name.clone());
+                    }
+                }
+                if let Some(slot) = load {
+                    self.save_slot = slot.clone();
+                    self.send(Command::Load { slot });
+                    self.selected = None;
+                    ui.close();
+                }
+                ui.label(RichText::new(format!("in {}", self.save_root.display())).small().weak());
+                ui.separator();
                 if ui.button("Quit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            // Re-read the slot list when the menu is opened, not every frame.
+            if game.response.clicked() {
+                self.slots = save::list_slots(&self.save_root);
+            }
             ui.menu_button("View", |ui| {
                 ui.label(RichText::new("Layout").weak());
                 for l in [LayoutKind::Classic, LayoutKind::Terminal] {
@@ -296,6 +339,7 @@ impl App {
             ui.menu_button("Windows", |ui| {
                 ui.toggle_value(&mut self.windows.brokers, "Brokers & Firms");
                 ui.toggle_value(&mut self.windows.personal, "Personal finance");
+                ui.toggle_value(&mut self.windows.financials, "Financials");
                 ui.toggle_value(&mut self.windows.settings, "Settings");
             });
             ui.separator();
@@ -304,24 +348,34 @@ impl App {
                 self.paused = !self.paused;
                 self.send(Command::SetPaused(self.paused));
             }
-            for (name, s) in [("1x", 1.0), ("16x", 16.0), ("256x", 256.0)] {
-                if ui.selectable_label(self.settings.speed == s, name).clicked() {
-                    self.settings.speed = s;
-                    self.send(Command::SetSpeed(s));
+            // Speed buttons exist only in development builds; the engine
+            // ignores speed commands in a time-locked build regardless.
+            let time_controls = self.snap.as_ref().is_some_and(|s| s.time_controls);
+            if time_controls {
+                for (name, s) in [("1x", 1.0), ("16x", 16.0), ("256x", 256.0)] {
+                    if ui.selectable_label(self.settings.speed == s, name).clicked() {
+                        self.settings.speed = s;
+                        self.send(Command::SetSpeed(s));
+                    }
                 }
             }
             if let Some(s) = &self.snap {
                 ui.separator();
-                let mins = REAL_SECS_PER_SIM_DAY / 60.0 / s.speed;
-                let boost = if s.closed_boost_active { " (closed: 8x)" } else { "" };
+                let pace = if !time_controls {
+                    "time-locked".to_string()
+                } else {
+                    let boost = if s.closed_boost_active { " (closed: 8x)" } else { "" };
+                    format!("DEV {:.1} real min/day{boost}", REAL_SECS_PER_SIM_DAY / 60.0 / s.speed)
+                };
+                let marked = if s.dev_time_used { "  |  dev-time save" } else { "" };
                 ui.monospace(format!(
-                    "Day {} {} {}  |  {:.1} real min/day{}  |  {}",
+                    "Day {} {} {}  |  {}  |  {}{}",
                     s.day,
                     s.weekday,
                     s.clock,
-                    mins,
-                    boost,
-                    s.regime.label()
+                    pace,
+                    s.regime.label(),
+                    marked
                 ));
             }
         });
@@ -445,6 +499,7 @@ impl eframe::App for App {
 
         windows::brokers::show(self, &ctx);
         windows::personal::show(self, &ctx);
+        windows::financials::show(self, &ctx);
         windows::settings::show(self, &ctx);
         self.toasts(&ctx, now);
         // The crawl animates every frame; vsync caps this at the display rate.

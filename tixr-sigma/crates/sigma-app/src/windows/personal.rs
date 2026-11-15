@@ -56,6 +56,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .show(ctx, |ui| {
             let Some(snap) = &app.snap else { return };
             let p = &snap.player;
+            let epoch_days = snap.epoch_days as i64;
             let st = &mut app.personal_ui;
             let total = p.equity - p.starting_cash;
             egui::Grid::new("pf_summary").num_columns(4).spacing([16.0, 2.0]).show(ui, |ui| {
@@ -132,7 +133,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                             }
                             ui.end_row();
                             for f in &p.fills {
-                                ui.monospace(format!("d{} {}", sigma_engine::time::day_index(f.time) as i64 - sigma_engine::engine::WARMUP_DAYS as i64 + 1, clock_string(f.time)));
+                                ui.monospace(format!("d{} {}", sigma_engine::time::day_index(f.time) as i64 - epoch_days + 1, clock_string(f.time)));
                                 let (s, c) = if f.side == Side::Buy { ("BUY", pal.up) } else { ("SELL", pal.down) };
                                 ui.colored_label(c, s);
                                 ui.monospace(f.ticker.as_str());

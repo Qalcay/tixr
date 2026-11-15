@@ -2,12 +2,13 @@
 
 use eframe::egui::{self, Align2, FontId, RichText, Sense, Ui, pos2, vec2};
 use sigma_engine::exchange::EXCHANGE_SPECS;
+use sigma_engine::history::ALL_RANGES;
 use sigma_engine::protocol::{Command, Side};
 use sigma_engine::security::SecurityKind;
 use sigma_engine::time::clock_string;
 
 use crate::app::{App, SortKey};
-use crate::chart::{self, ALL_RANGES};
+use crate::chart;
 use crate::format;
 
 const ROW_H: f32 = 18.0;
@@ -44,7 +45,7 @@ fn security_list_inner(app: &mut App, ui: &mut Ui, snap: &sigma_engine::Snapshot
         });
     });
     ui.label(
-        RichText::new(format!("{} shown / {} listed / cap 65,536", app.view.len(), snap.rows.len()))
+        RichText::new(format!("{} shown / {} listed / cap 16,384", app.view.len(), snap.rows.len()))
             .small()
             .color(pal.text_weak),
     );
@@ -158,8 +159,11 @@ fn detail_inner(app: &mut App, ui: &mut Ui, snap: &sigma_engine::Snapshot, reser
     ui.horizontal(|ui| {
         ui.heading(RichText::new(d.ticker.as_str()).strong());
         let kind = if d.kind == SecurityKind::Fund { "Fund" } else { "Stock" };
-        let listed =
-            if d.listed_day <= 0 { "listed before day 1".to_string() } else { format!("listed day {}", d.listed_day) };
+        let listed = if d.listed_day <= 0 {
+            format!("founded {:.1}y ago", d.age_years)
+        } else {
+            format!("listed day {}", d.listed_day)
+        };
         ui.label(format!("{kind} · {} · {listed} · {}", EXCHANGE_SPECS[d.exchange as usize].name, d.sponsor));
         persona_label(ui, d.persona);
     });
@@ -206,7 +210,15 @@ fn detail_inner(app: &mut App, ui: &mut Ui, snap: &sigma_engine::Snapshot, reser
         ui.label(RichText::new("dashed: fair value / mean forecast; bands: 68% and 95%").small().color(pal.text_weak));
     });
     let chart_h = (ui.available_height() - 64.0 - reserve).max(120.0);
-    chart::price_chart(ui, vec2(ui.available_width(), chart_h), d, app.chart_range, app.settings.show_forecast, &pal);
+    chart::price_chart(
+        ui,
+        vec2(ui.available_width(), chart_h),
+        d,
+        snap.time,
+        app.chart_range,
+        app.settings.show_forecast,
+        &pal,
+    );
 
     ui.horizontal(|ui| {
         ui.add(
@@ -331,7 +343,7 @@ pub fn population(app: &App, ui: &mut Ui) {
             ui,
             "Live / K",
             format!("{} / {:.0}", p.live, p.carrying_capacity),
-            "Listings vs the carrying capacity the economy supports (8,192..32,768 band, hard cap 65,536).",
+            "Listings vs the carrying capacity the economy supports (floor about 8,000, hard cap 16,384).",
         );
         kv(ui, "Stocks/funds", format!("{} / {}", p.stocks, p.funds), "");
         kv(ui, "IPOs", format!("{}", p.ipos), "New listings since start (engine, firms and you).");
@@ -343,7 +355,18 @@ pub fn population(app: &App, ui: &mut Ui) {
             format!("{} / {}", p.penny_delistings, p.fund_closures),
             "Delisted below $1 for 20 sessions / funds wound up.",
         );
-        kv(ui, "Brokers", format!("{} alive, {} broke", p.brokers_alive, p.brokers_broke), "");
+        kv(
+            ui,
+            "Brokers/firms",
+            format!("{} / {}", p.brokers_alive, p.firms_alive),
+            "Participants alive. Caps: 13,927 brokers and 2,457 firms (85/15 of 16,384).",
+        );
+        kv(
+            ui,
+            "Broke/rescued",
+            format!("{} / {}", p.brokers_broke, p.rescues),
+            "Brokers and firms gone broke / Key securities rescued instead of delisted.",
+        );
         kv(
             ui,
             "Engine",

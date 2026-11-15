@@ -6,8 +6,11 @@
 //! Rust program: the compiler proves there are no data races, and neither
 //! side can ever block the other on a lock.
 
+use std::sync::Arc;
+
 use crate::broker::{BrokerId, BrokerKind, Strategy};
 use crate::console::Level;
+use crate::history::History;
 use crate::macroecon::{Regime, TENORS};
 use crate::persona::Persona;
 use crate::security::{SecurityId, SecurityKind, Ticker};
@@ -36,13 +39,98 @@ pub struct LaunchRequest {
     pub fund: bool,
 }
 
+/// Market-wide series with chart history (the Financials window).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum MarketSeries {
+    Index0 = 0,
+    Index1,
+    Index2,
+    Index3,
+    PolicyRate,
+    Yield10Y,
+    Inflation,
+    CreditSpread,
+    BrokerEquity,
+    FirmEquity,
+    Listings,
+}
+
+pub const ALL_MARKET_SERIES: [MarketSeries; 11] = [
+    MarketSeries::Index0,
+    MarketSeries::Index1,
+    MarketSeries::Index2,
+    MarketSeries::Index3,
+    MarketSeries::PolicyRate,
+    MarketSeries::Yield10Y,
+    MarketSeries::Inflation,
+    MarketSeries::CreditSpread,
+    MarketSeries::BrokerEquity,
+    MarketSeries::FirmEquity,
+    MarketSeries::Listings,
+];
+
+/// How a series' values should be printed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeriesUnit {
+    Level,
+    Percent,
+    Money,
+    Count,
+}
+
+impl MarketSeries {
+    pub fn label(self) -> &'static str {
+        match self {
+            MarketSeries::Index0 => "EX01 index",
+            MarketSeries::Index1 => "CHA2 index",
+            MarketSeries::Index2 => "4MAQ index",
+            MarketSeries::Index3 => "AST8 index",
+            MarketSeries::PolicyRate => "Policy rate",
+            MarketSeries::Yield10Y => "10Y yield",
+            MarketSeries::Inflation => "Inflation",
+            MarketSeries::CreditSpread => "Credit spread",
+            MarketSeries::BrokerEquity => "Brokers: total equity",
+            MarketSeries::FirmEquity => "Firms: total equity",
+            MarketSeries::Listings => "Listed securities",
+        }
+    }
+
+    pub fn unit(self) -> SeriesUnit {
+        match self {
+            MarketSeries::Index0 | MarketSeries::Index1 | MarketSeries::Index2 | MarketSeries::Index3 => {
+                SeriesUnit::Level
+            }
+            MarketSeries::PolicyRate
+            | MarketSeries::Yield10Y
+            | MarketSeries::Inflation
+            | MarketSeries::CreditSpread => SeriesUnit::Percent,
+            MarketSeries::BrokerEquity | MarketSeries::FirmEquity => SeriesUnit::Money,
+            MarketSeries::Listings => SeriesUnit::Count,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     /// Multiplier on the base pace (1.0 = 90 real minutes per sim day).
+    /// Honoured only in builds with time controls (see
+    /// [`crate::runner::TIME_CONTROLS`]); a release game is time-locked.
     SetSpeed(f64),
     SetPaused(bool),
     /// Run 8x faster while every exchange is closed (nights, weekends).
+    /// Also a time control, so also dev-only.
     SetClosedBoost(bool),
+    /// Which market-wide series the snapshot should carry history for.
+    SelectSeries(Option<MarketSeries>),
+    /// Write the game to the named slot under the save directory.
+    Save {
+        slot: String,
+    },
+    /// Replace the running game with the one in the named slot.
+    Load {
+        slot: String,
+    },
     SetLogLevel(Level),
     Select(Option<SecurityId>),
     FocusBroker(Option<BrokerId>),
@@ -137,8 +225,10 @@ pub struct SecurityDetail {
     pub half_life_days: f64,
     pub annual_vol: f64,
     pub distance_to_default: f64,
-    pub closes: Vec<f32>,
-    pub intraday: Vec<f32>,
+    pub age_years: f64,
+    pub rescues: u16,
+    /// All chart tiers; the UI picks a range without a round trip.
+    pub history: History,
     pub forecast: Vec<ForecastPoint>,
     pub player_shares: f64,
     pub player_avg_cost: f64,
@@ -177,6 +267,8 @@ pub struct BrokerDetail {
     pub holdings: Vec<HoldingRow>,
     pub fees_paid: f64,
     pub interest_earned: f64,
+    /// Daily equity history.
+    pub history: History,
 }
 
 #[derive(Clone, Debug)]
@@ -217,7 +309,9 @@ pub struct PopulationView {
     pub fund_closures: u64,
     pub splits: u64,
     pub brokers_alive: usize,
+    pub firms_alive: usize,
     pub brokers_broke: u64,
+    pub rescues: u64,
     pub repairs: u64,
 }
 
@@ -238,12 +332,20 @@ pub struct Snapshot {
     pub time: SimTime,
     /// Day number shown to the user (1 = first day after warm-up).
     pub day: i64,
+    /// Sim days before day 1 (to turn any sim time into a display day).
+    pub epoch_days: u64,
     pub weekday: &'static str,
     pub clock: String,
     pub seed: u64,
     pub speed: f64,
     pub paused: bool,
     pub closed_boost_active: bool,
+    /// Whether this build accepts speed changes at all.
+    pub time_controls: bool,
+    /// True once this game has ever run at a speed other than 1x.
+    pub dev_time_used: bool,
+    /// History of the series chosen with [`Command::SelectSeries`].
+    pub series: Option<(MarketSeries, History)>,
     pub lag_secs: f64,
     pub events_per_real_sec: f64,
     pub tick_density: f64,
@@ -253,10 +355,15 @@ pub struct Snapshot {
     pub exchanges: Vec<ExchangeView>,
     pub rows: Vec<Row>,
     pub detail: Option<SecurityDetail>,
-    pub brokers: Vec<BrokerRow>,
+    /// Shared, refreshed every couple of real seconds (thousands of rows).
+    pub brokers: Arc<Vec<BrokerRow>>,
     pub broker_detail: Option<BrokerDetail>,
     pub player: PlayerView,
     pub population: PopulationView,
     pub feed: Vec<FeedItem>,
     pub notices: Vec<Notice>,
 }
+
+crate::tag_enum!(Side { Buy = 0, Sell = 1 });
+crate::record!(FillRecord { time, ticker, side, shares, price, fee, realized });
+crate::record!(FeedItem { time, text });

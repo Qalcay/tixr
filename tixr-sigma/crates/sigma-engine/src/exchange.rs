@@ -20,6 +20,7 @@
 
 use crate::macroecon::{MacroState, ou_step};
 use crate::rng::Rng;
+use crate::save::Persist;
 use crate::time::Session;
 
 pub const EXCHANGE_COUNT: usize = 4;
@@ -141,6 +142,35 @@ impl Exchange {
             ou_step(self.earnings_noise, 0.0, EARN_NOISE_KAPPA, EARN_NOISE_SIGMA, dt, rng.normal()).clamp(-0.5, 0.5);
         self.trend += (m.long_growth() + self.spec.growth_tilt) * dt;
         self.factor = self.compute_factor(m);
+    }
+}
+
+impl crate::save::Persist for Exchange {
+    fn put(&self, w: &mut crate::save::Writer) {
+        self.id.put(w);
+        self.trend.put(w);
+        self.earnings_noise.put(w);
+        self.log_pe.put(w);
+        self.factor.put(w);
+        self.factor_at_start.put(w);
+        self.prev_close_index.put(w);
+        self.is_open.put(w);
+    }
+    fn get(r: &mut crate::save::Reader) -> crate::save::Result<Self> {
+        let id = u8::get(r)?;
+        // The spec is static data: looked up, never trusted from the file.
+        let spec = *EXCHANGE_SPECS.get(id as usize).ok_or(crate::save::SaveError::Corrupt("exchange id"))?;
+        Ok(Self {
+            id,
+            spec,
+            trend: Persist::get(r)?,
+            earnings_noise: Persist::get(r)?,
+            log_pe: Persist::get(r)?,
+            factor: Persist::get(r)?,
+            factor_at_start: Persist::get(r)?,
+            prev_close_index: Persist::get(r)?,
+            is_open: Persist::get(r)?,
+        })
     }
 }
 

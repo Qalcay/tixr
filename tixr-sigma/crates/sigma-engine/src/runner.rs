@@ -14,8 +14,12 @@
 //! * Snapshots use a bounded channel of 2. If the UI is slow, the engine
 //!   skips a snapshot instead of queueing stale ones (back-pressure).
 //! * The sim clock is tied to real time: `BASE_TIME_SCALE` (16 sim seconds
-//!   per real second) times the user's speed multiplier.
+//!   per real second). A release game is locked to that pace; the speed
+//!   multiplier only exists in development builds (see [`TIME_CONTROLS`]).
+//! * Saving and loading run on this thread too, because it owns the
+//!   engine: the UI just sends `Command::Save` / `Command::Load`.
 
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -31,6 +35,18 @@ const IDLE_SLEEP: Duration = Duration::from_millis(4);
 /// Extra speed while every exchange is closed.
 pub const CLOSED_BOOST: f64 = 8.0;
 pub const MAX_SPEED: f64 = 4_096.0;
+/// Whether this build lets anyone change how fast sim time runs.
+///
+/// A real game is time-locked: 90 real minutes are 24 sim hours, always,
+/// so every play-through of a seed is comparable. Speed and the
+/// closed-hours boost exist for development (soak tests, tuning) and are
+/// compiled in only for debug builds or with `--features dev-time`:
+///
+/// ```text
+/// cargo run --release                      # the game: time-locked
+/// cargo run --release --features dev-time  # development: speed controls
+/// ```
+pub const TIME_CONTROLS: bool = cfg!(any(debug_assertions, feature = "dev-time"));
 
 pub struct EngineHandle {
     commands: Sender<Command>,
@@ -72,16 +88,74 @@ impl Drop for EngineHandle {
     }
 }
 
+/// Slot written when the game shuts down with autosave on.
+pub const AUTOSAVE_SLOT: &str = "autosave";
+
+#[derive(Clone, Debug)]
+pub struct RunnerOptions {
+    /// Directory that holds one sub-directory per save slot.
+    pub save_root: PathBuf,
+    /// Write [`AUTOSAVE_SLOT`] when the engine is shut down.
+    pub autosave_on_exit: bool,
+    /// Load this slot instead of generating a new world, if it exists.
+    pub load_slot: Option<String>,
+}
+
+impl Default for RunnerOptions {
+    fn default() -> Self {
+        Self { save_root: PathBuf::from("saves"), autosave_on_exit: false, load_slot: None }
+    }
+}
+
 /// Start the engine thread. `wake` is called after each snapshot is sent so
 /// the UI can request a repaint (e.g. `egui::Context::request_repaint`).
-pub fn spawn(config: EngineConfig, wake: impl Fn() + Send + 'static) -> EngineHandle {
+pub fn spawn(config: EngineConfig, options: RunnerOptions, wake: impl Fn() + Send + 'static) -> EngineHandle {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     let (snap_tx, snap_rx) = mpsc::sync_channel::<Box<Snapshot>>(2);
     let thread = std::thread::Builder::new()
         .name("sigma-engine".into())
-        .spawn(move || run(config, cmd_rx, snap_tx, wake))
+        .spawn(move || run(config, options, cmd_rx, snap_tx, wake))
         .expect("failed to spawn engine thread");
     EngineHandle { commands: cmd_tx, snapshots: snap_rx, thread: Some(thread) }
+}
+
+fn save_game(engine: &mut Engine, options: &RunnerOptions, slot: &str) {
+    let notice = match engine.save_to(&options.save_root, slot) {
+        Ok(r) => {
+            crate::console!(
+                Level::Info,
+                engine.now,
+                "saved slot '{slot}': state {} KB, history {} KB, {} ms",
+                r.state_bytes / 1024,
+                r.history_bytes / 1024,
+                r.millis
+            );
+            Notice::Info(format!("Saved to slot '{slot}' ({} ms)", r.millis))
+        }
+        Err(e) => {
+            crate::console!(Level::Warn, engine.now, "save to '{slot}' failed: {e}");
+            Notice::Error(format!("Save failed: {e}"))
+        }
+    };
+    engine.notify(notice);
+}
+
+fn load_game(options: &RunnerOptions, slot: &str) -> Result<Engine, Notice> {
+    match Engine::load_from(&options.save_root, slot) {
+        Ok((mut engine, report)) => {
+            let charts = match &report.history {
+                Ok(n) => format!("{n} charts restored"),
+                Err(e) => format!("charts start empty: {e}"),
+            };
+            crate::console!(Level::Info, engine.now, "loaded slot '{slot}' in {} ms ({charts})", report.millis);
+            engine.notify(Notice::Info(format!("Loaded slot '{slot}' ({charts})")));
+            Ok(engine)
+        }
+        Err(e) => {
+            crate::console!(Level::Warn, 0.0, "load of '{slot}' failed: {e}");
+            Err(Notice::Error(format!("Load failed: {e}")))
+        }
+    }
 }
 
 struct Pacing {
@@ -90,11 +164,27 @@ struct Pacing {
     closed_boost: bool,
 }
 
-fn run(config: EngineConfig, rx: Receiver<Command>, tx: SyncSender<Box<Snapshot>>, wake: impl Fn()) {
-    let mut engine = Engine::new(config.clone());
-    let mut pacing = Pacing { speed: 1.0, paused: false, closed_boost: true };
+fn run(
+    config: EngineConfig,
+    options: RunnerOptions,
+    rx: Receiver<Command>,
+    tx: SyncSender<Box<Snapshot>>,
+    wake: impl Fn(),
+) {
+    let mut engine = match options.load_slot.as_deref().map(|slot| load_game(&options, slot)) {
+        Some(Ok(engine)) => engine,
+        Some(Err(notice)) => {
+            let mut fresh = Engine::new(config.clone());
+            fresh.notify(notice);
+            fresh
+        }
+        None => Engine::new(config.clone()),
+    };
+    // Time-locked by default: 1x, no closed-hours boost.
+    let mut pacing = Pacing { speed: 1.0, paused: false, closed_boost: false };
     let mut wanted = engine.now;
     let mut last = Instant::now();
+
     let mut last_snapshot = Instant::now() - SNAPSHOT_INTERVAL;
     let mut window_start = Instant::now();
     let mut window_busy = Duration::ZERO;
@@ -109,17 +199,54 @@ fn run(config: EngineConfig, rx: Receiver<Command>, tx: SyncSender<Box<Snapshot>
         loop {
             match rx.try_recv() {
                 Ok(cmd) => match cmd {
-                    Command::Shutdown => return,
-                    Command::SetSpeed(s) => pacing.speed = s.clamp(1.0 / 16.0, MAX_SPEED),
+                    Command::Shutdown => {
+                        if options.autosave_on_exit {
+                            save_game(&mut engine, &options, AUTOSAVE_SLOT);
+                        }
+                        return;
+                    }
+                    // Time controls: ignored outright in a time-locked build,
+                    // whatever the UI (or anything else) sends.
+                    Command::SetSpeed(s) => {
+                        if TIME_CONTROLS {
+                            pacing.speed = s.clamp(1.0 / 16.0, MAX_SPEED);
+                            engine.dev_time_used |= pacing.speed != 1.0;
+                        }
+                    }
+                    Command::SetClosedBoost(b) => {
+                        if TIME_CONTROLS {
+                            pacing.closed_boost = b;
+                            engine.dev_time_used |= b;
+                        }
+                    }
                     Command::SetPaused(p) => pacing.paused = p,
-                    Command::SetClosedBoost(b) => pacing.closed_boost = b,
+                    Command::Save { slot } => {
+                        save_game(&mut engine, &options, &slot);
+                        // Do not count the time spent writing as sim time.
+                        last = Instant::now();
+                        force_snapshot = true;
+                    }
+                    Command::Load { slot } => {
+                        match load_game(&options, &slot) {
+                            Ok(loaded) => {
+                                engine = loaded;
+                                wanted = engine.now;
+                                engine.dev_time_used |= pacing.speed != 1.0 || pacing.closed_boost;
+                            }
+                            Err(notice) => engine.notify(notice),
+                        }
+                        last = Instant::now();
+                        force_snapshot = true;
+                    }
                     Command::SetLogLevel(l) => {
                         console::set_level(l);
                         crate::console!(Level::Warn, engine.now, "console level set to {}", l.label());
                     }
                     Command::Restart { seed } => {
-                        engine = Engine::new(EngineConfig { seed, ..config.clone() });
+                        // A new world is a new game: it gets a fresh game seed.
+                        engine = Engine::new(EngineConfig { seed, game_seed: None, ..config.clone() });
                         wanted = engine.now;
+                        last = Instant::now();
                         force_snapshot = true;
                     }
                     other => {
@@ -211,6 +338,71 @@ fn run(config: EngineConfig, rx: Receiver<Command>, tx: SyncSender<Box<Snapshot>
 
         if adv.reached {
             std::thread::sleep(IDLE_SLEEP);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::save;
+
+    fn tiny() -> EngineConfig {
+        EngineConfig { initial_securities: 300, brokers: 30, firms: 6, warmup: false, ..Default::default() }
+    }
+
+    fn wait_for(handle: &EngineHandle, mut done: impl FnMut(&Snapshot) -> bool) -> Box<Snapshot> {
+        for _ in 0..600 {
+            if let Some(s) = handle.latest()
+                && done(&s)
+            {
+                return s;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("engine thread did not respond in time");
+    }
+
+    /// The whole loop through the real thread and channels: save on
+    /// command, autosave on shutdown, then boot straight from the autosave.
+    #[test]
+    fn save_command_autosave_on_exit_and_boot_from_slot() {
+        console::set_level(Level::Off);
+        let root = std::env::temp_dir().join(format!("tixr-runner-test-{}", save::fresh_seed()));
+        let options = RunnerOptions { save_root: root.clone(), autosave_on_exit: true, load_slot: None };
+        let handle = spawn(tiny(), options.clone(), || {});
+        handle.send(Command::Save { slot: "manual".into() });
+        let snap = wait_for(&handle, |s| s.notices.iter().any(|n| matches!(n, Notice::Info(t) if t.contains("Saved"))));
+        let seed = snap.seed;
+        drop(handle); // Shutdown -> autosave, and the thread is joined.
+        let slots: Vec<String> = save::list_slots(&root).into_iter().map(|s| s.name).collect();
+        assert!(slots.contains(&"manual".to_string()) && slots.contains(&AUTOSAVE_SLOT.to_string()), "{slots:?}");
+
+        let options = RunnerOptions { load_slot: Some(AUTOSAVE_SLOT.into()), autosave_on_exit: false, ..options };
+        let handle = spawn(EngineConfig { seed: seed + 1, ..tiny() }, options, || {});
+        let snap =
+            wait_for(&handle, |s| s.notices.iter().any(|n| matches!(n, Notice::Info(t) if t.contains("Loaded"))));
+        assert_eq!(snap.seed, seed, "the saved world was loaded, not a new one generated");
+        drop(handle);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A time-locked build must ignore speed commands no matter who sends
+    /// them; a development build must honour them and mark the game.
+    #[test]
+    fn speed_commands_follow_the_build_kind() {
+        console::set_level(Level::Off);
+        let handle = spawn(tiny(), RunnerOptions::default(), || {});
+        handle.send(Command::SetSpeed(64.0));
+        handle.send(Command::SetPaused(true));
+        let snap = wait_for(&handle, |s| s.paused);
+        assert_eq!(snap.time_controls, TIME_CONTROLS);
+        if TIME_CONTROLS {
+            assert_eq!(snap.speed, 64.0);
+            assert!(snap.dev_time_used);
+        } else {
+            assert_eq!(snap.speed, 1.0);
+            assert!(!snap.dev_time_used);
         }
     }
 }

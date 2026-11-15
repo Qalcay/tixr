@@ -6,7 +6,18 @@ This document covers three things: what makes each security behave differently, 
 
 ## Part 1: Stock personas (perks A-P)
 
-Every stock carries a **persona**: a set of 0 to 12 of the 16 perks lettered **A** to **P**, stored as a 16-bit mask. It appears as a short string such as `BGL` in the detail view (hover for the meaning of each letter), and you can search the list by perk letters.
+Every stock carries a **persona**: a set of 0 to 12 of the 16 perks lettered **A** to **P**, stored as a 16-bit mask. It appears as a short string such as `BGK` in the detail view (hover for the meaning of each letter), and you can search the list by perk letters.
+
+### Where the list comes from
+
+The list is a mix of the first sigma build's perks and the list in `A-P_Tixr_types_sigma.txt`. The rule for the mix was **one signature mechanism per perk**: each letter owns one behaviour that no other letter has, so two perks can never be "the same thing with different numbers". The test `every_perk_has_a_unique_signature` enforces it.
+
+| Decision | Perks | Why |
+|---|---|---|
+| Taken from your list | Assets, Builder, Crypto, Data, Finance, Global, Hype, Innovate, Key, Legacy, Meager, Novel, Opportunity, Profit | Each has a distinct mechanism (table below) |
+| Kept from the first build | **E** Expansion, **J** Junk | Nothing in your list covered long-duration growth (rate sensitivity) or leverage (credit sensitivity), and both give the yield curve and the credit spread something to bite on |
+| Dropped: Equity | | "Slow, reliable appreciation, exceptional survivability" is Data (steady compounding) plus Meager (low volatility) plus Key (cannot disappear). It had no mechanism of its own |
+| Dropped: Jumpy | | "Large swings regardless of the business" is what Crypto already does. Its fat symmetric jumps were folded into Crypto |
 
 ### How many perks a stock gets
 
@@ -16,32 +27,63 @@ The length is drawn from a fixed, right-skewed table (`persona::LENGTH_WEIGHTS`)
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Weight % | 6 | 12 | 17 | 16 | 12 | 9 | 7 | 6 | 5 | 4 | 3 | 2 | 1 |
 
-That gives a **median of 3**, a **mean of about 4.1**, and **11-12 perks in about 3%** of stocks. The brief asked for an average of about 4-7 and a median of 2-3. Both can hold only with a long right tail, which is what this table has: most stocks are simple, and a few are "characters". The test `length_distribution_matches_brief` pins these numbers.
-
-Letters are then picked at random without repeats. Two contradictory pairs are never drawn together: **Cyclical/Defensive** and **Liquid/Illiquid**. Index funds get a plain persona (just **L**). When you launch your own company you can pick its perks by hand.
+That gives a **median of 3**, a **mean of about 4.1**, and **11-12 perks in about 3%** of stocks. Letters are picked at random without repeats, skipping any letter that contradicts one already chosen (see "Exclusive pairs"). Index funds get a plain persona. When you launch your own company you can pick its perks by hand; contradictions are removed for you.
 
 ### What each perk does
 
-Perks change the security's model parameters when it lists. Multipliers multiply, offsets add, and the result is clamped to a safe range, so no combination of 12 perks can destabilise the model.
+| | Perk | Signature mechanism | Supporting changes | In plain words |
+|---|---|---|---|---|
+| **A** | Assets | Loads on the **inflation** factor (+2.5) | rate duration -1.5, fundamental vol x0.9 | Holds value when money is printed |
+| **B** | Builder | **Contract wins**: rare, permanent upward steps in fundamentals, with the drift between wins lowered to pay for them | default barrier +0.1 | Staircase: flat stretches, then a step up |
+| **C** | Crypto | **Fat, symmetric jumps**: 3x as often, 2.2x as large | mispricing vol x1.5, beta -0.2, barrier -0.35, prints x1.5 | Boom or bust |
+| **D** | Data | **Steady drift**: +3%/yr growth with muted jumps (x0.6) | fundamental vol x0.8, barrier +0.5 | Compounds quietly |
+| **E** | Expansion | **Long duration**: +4.5 years of rate sensitivity | growth +4.5%/yr, fundamental vol x1.2 | Growth story; falls when the 10Y rises |
+| **F** | Finance | Loads on the **business-cycle** factor (running sum of the output gap) | beta +0.25, credit +1.5 | Outruns expansions, lags recessions |
+| **G** | Global | **60% of its market exposure follows the world average** of all exchanges, and regimes hit it half as hard | inflation exposure x0.3, fundamental vol x0.9 | A local crisis is a smaller event |
+| **H** | Hype | **Listing hump**: a mispricing bulge that peaks weeks after listing and unwinds over years | mispricing vol x1.5, reversion x0.6, growth -2%/yr | Mania, then a long hangover |
+| **I** | Innovate | **Catalysts**: positive shocks to the *mispricing* term, so each one fades | growth +1%/yr, fundamental vol x1.1 | Pops on news, then drifts back |
+| **J** | Junk | **Leverage**: credit exposure +3, default barrier -0.55 | beta +0.2, fundamental vol x1.15 | First to go in a credit crunch |
+| **K** | Key | **Rescue**: at the default barrier it is recapitalised instead of delisted; below $1 it reverse-splits | barrier +0.6, impact x0.55, prints x1.5 | Too important to vanish |
+| **L** | Legacy | **Decline**: after a grace period its fundamentals bleed, slowly at first | fundamental vol x0.8, beta -0.1, barrier +0.3 | Stable for years, then erodes |
+| **M** | Meager | **Damping**: growth x0.4, fundamental vol x0.65, reversion x1.7 | beta -0.25, jumps x0.5 | Neither excels nor fails |
+| **N** | Novel | **Verdict**: at a random date its fundamentals step up or down by 45-85%, 50/50, with higher volatility beforehand | barrier -0.15, impact x1.5, prints x0.6 | Unproven until the day it is proven |
+| **O** | Opportunity | **Crashes that heal**: negative shocks to the *mispricing* term, so recovery is built in | growth +1%/yr | Sharp falls, real rebounds |
+| **P** | Profit | Loads on the **recovery** factor, which climbs for about 300 days after a Crisis ends and 90 after a Correction | growth +1%/yr, barrier +0.2 | Earns most after it has been tested |
 
-| | Perk | Effect on the model | In plain words |
-|---|---|---|---|
-| **A** | Anchor | reversion speed x1.8, mispricing vol x0.8 | Snaps back to fair value fast |
-| **B** | Blue-chip | fundamental vol x0.7, default barrier +0.8, prints x1.3, impact x0.6 | Large, steady, hard to kill |
-| **C** | Cyclical | beta +0.35, credit exposure +1.5 | Amplifies the market; hurt by widening credit spreads |
-| **D** | Defensive | beta -0.30, fundamental vol x0.85, jumps x0.7 | Damps the market |
-| **E** | Expansion | growth +4%/yr, fundamental vol x1.2, rate duration +4 | Growth story; very sensitive to the 10Y yield |
-| **F** | Frothy | mispricing vol x1.5, reversion x0.6 | Sentiment runs hot and stays hot |
-| **G** | Gambler | jump rate x2.5, jump mean +3%, prints x1.6, mispricing vol x1.3 | Meme stock |
-| **H** | Hard assets | inflation exposure +3, beta -0.1, duration -1 | Commodity-like; gains when inflation rises |
-| **I** | Illiquid | prints x0.35, impact x2.5 | Rarely prints; orders move it a lot |
-| **J** | Junk | default barrier -0.6, credit exposure +3, beta +0.2, fundamental vol x1.15 | Leveraged; first to go in a credit crunch |
-| **K** | Kingpin | growth -1%/yr, barrier +0.4, fundamental vol x0.8, duration +1.5 | Mature dividend payer; bond-like |
-| **L** | Liquid | prints x1.8, impact x0.5 | Constant prints; deep market |
-| **M** | Momentum | reversion x0.7 (and momentum brokers weight it 1.5x) | Trends persist |
-| **N** | Novel | fundamental vol x1.4, jumps x1.5, jump mean +4%, growth +2%, barrier -0.2 | Innovator with upside jumps |
-| **O** | Oligopoly | fundamental vol x0.75, growth +1%, barrier +0.5, reversion x1.2 | Moat |
-| **P** | Phoenix | barrier -0.5, jump mean +2%, never penny-delisted | Survives deep drawdowns |
+Builder, Innovate and Opportunity are the three "shock" perks, and they differ in where the shock lands. Builder's wins go into the **fundamental** and stay. Innovate's catalysts and Opportunity's crashes go into the **mispricing** and decay at the stock's own reversion speed.
+
+### Exclusive pairs
+
+Five pairs contradict each other in their own descriptions and are never combined (`persona::EXCLUSIVE_PAIRS`):
+
+| Pair | Why |
+|---|---|
+| Crypto / Meager | "extreme boom or bust" against "consistent low volatility" |
+| Crypto / Data | "catastrophic collapses equally likely" against "rarely experiences catastrophic decline" |
+| Legacy / Novel | an established incumbent cannot be an unproven concept |
+| Legacy / Expansion | slow loss of competitiveness against a growth story |
+| Legacy / Hype | "stable early on" against a listing mania |
+
+Everything else may stack. Opposites that only cancel in size (Meager with Junk, Key with Junk) are allowed: they produce a muted version of both, which is a legitimate character.
+
+### Stacking audit: why no combination breaks the game
+
+You asked for assurance that stacking cannot produce a flatline, a sine wave or a saw-tooth. Each one is ruled out by construction and then checked by a test.
+
+| Failure | Why it cannot happen | Test |
+|---|---|---|
+| **Flatline** | After all multipliers, fundamental vol is clamped to at least 5%/yr, mispricing vol to at least 10%/yr and beta to at least 0.15. Even 12 damping perks leave a stock that moves every day | bounds test (all 65,536 masks); path test (no zero-return days) |
+| **Sine wave** | The only restoring force on price is first-order mean reversion (an OU process). A first-order system decays toward its target; it has no second state to overshoot with, so it cannot oscillate. Reversion speed is clamped to 2-36 per year | path test: autocorrelation of daily returns below 0.25 at every lag from 1 to 60 days |
+| **Saw-tooth** | A saw-tooth needs shocks on a regular beat. All shocks (wins, catalysts, crashes, jumps) arrive on Poisson clocks, which are memoryless, and their sizes are drawn relative to the stock's own noise. The transient ones are also capped in how much they can shift the average price (4% for catalysts, 10% for crashes) | path test: same autocorrelation check, plus longest run of same-sign days below 40 |
+| **Runaway** | Additive effects are clamped per parameter; price above $2,500 splits; log price is clamped | bounds test |
+| **Immortal or instant-death stocks** | The default barrier is clamped to a range, and Key rescues dilute the stock each time | bounds test; `rescue_restores_the_barrier_without_a_price_gap_beyond_dilution` |
+
+The bounds test is `security::tests::all_65536_perk_sets_stay_in_safe_bounds` and the path test is `security::tests::stacked_personas_do_not_flatline_oscillate_or_sawtooth`. The path test simulates 500 random personas for 1,095 days each and checks every one: daily volatility between 0.25% and 20%, no zero-return day, no lag with meaningful autocorrelation, no long one-way run. Rare large events (a Novel verdict, a Crypto jump) are clipped before the autocorrelation is measured, so a single big day cannot mask or fake a pattern.
+
+Two stacking effects are intended and worth knowing as a player:
+
+* **Hype + Innovate + Crypto** is the wildest legal persona. It stays inside the 20% daily volatility ceiling the path test enforces, and it is rare and usually short-lived.
+* **Key + Junk** goes to the barrier often and is rescued each time. Each rescue dilutes holders, so "cannot disappear" does not mean "cannot lose you money".
 
 ### Parameter glossary
 
@@ -50,38 +92,53 @@ Perks change the security's model parameters when it lists. Multipliers multiply
 * **inflation / credit exposure**: loadings on inflation and on minus the credit spread.
 * **growth (alpha)** and **fundamental vol (sigma_f)**: drift and volatility of the firm's own earnings power `y`, plus compound-Poisson **jumps** (earnings surprises).
 * **mispricing (u)**: how far the price is from model fair value, mean-reverting with half-life `ln 2 / kappa`.
-* **default barrier**: the firm is bankrupt when its fair value falls this many log units below its listing level. A barrier of 1.6 means a fall to about 20% of the listing fair value.
+* **default barrier**: the firm is bankrupt when its fair value falls this many log units below its listing level.
 * **prints**: how often its price updates while its exchange is open. This affects only how often you see a new price, not how the price behaves.
 
 ---
 
 ## Part 2: Brokers & Firms
 
+### How many of everything
+
+| Limit | Value | Constant |
+|---|---|---|
+| Everything, all kinds together | 32,768 (2^15) | `engine::MAX_ENTITIES` |
+| Stocks listed at once | 16,384 (2^14) | `engine::MAX_SECURITIES` |
+| Stock floor | about 8,000 | `engine::TARGET_MIN` |
+| Brokers and firms together | 16,384 | `broker::MAX_PARTICIPANTS` |
+| Firms (15% of that) | 2,457 | `broker::MAX_FIRMS` |
+| Plain brokers (85%) | 13,927 | `broker::MAX_PLAIN_BROKERS` |
+
+A new game starts with 8,600 stocks and half the broker and firm caps. The stock count follows a carrying capacity `K` that the economy moves between 8,192 and 11,000. If the count ever nears 8,000 the engine pauses acquisitions and relists a quarter of the shortfall each day, so in a 2,000-day probe it stayed between 8,650 and 8,750. Brokers and firms drift toward a share of their caps that depends on the economy (35% in a slump, 95% in a boom).
+
 ### Who they are
 
-256 simulated participants. About a quarter start as **firms**; the rest are **brokers**. A firm is a broker with a balance sheet: it starts with 5-25x more capital, has lower operating costs, and can also act as an **issuer**.
+A **firm** is a broker with a balance sheet: it starts with 5-25x more capital, has lower operating costs, and can also act as an **issuer**.
 
-* **Underwriting.** About 40% of IPOs are underwritten by a firm. The firm earns a 2% fee on a 25% float and buys a 5% stake at the offer price. The feed and the Brokers window show this ("listings underwritten").
-* **Index funds.** Firms that have grown to 1.5x their starting capital occasionally launch an index fund (ticker ends in `X`, beta 1 to its exchange, very low idiosyncratic risk). If the firm fails, its funds are wound up at their last price.
-
-So "brokers can be firms too" holds literally: a firm trades exactly like a broker, and issuing is an extra capability.
+* **Underwriting.** About 40% of IPOs are underwritten by a firm. The firm earns a 2% fee on a 25% float and buys a 5% stake at the offer price.
+* **Index funds.** Firms that have grown to 1.5x their starting capital occasionally launch an index fund (ticker ends in `X`). If the firm fails, its funds are wound up at their last price.
 
 ### Strategies
 
-| Strategy | Buys when | Sells when | Typical pace |
-|---|---|---|---|
-| **Value** | estimated mispricing < -3% | mispricing > +1.5%, or stop/take-profit | every 5-30 sim min |
-| **Whale** | mispricing < -6%, in large size | mispricing > +3% | every 1-4 sim h |
-| **Momentum** | 5-session return > +3% (x1.5 on perk M) | trend turns, or a tight 10% stop | every 5-30 sim min |
-| **Contrarian** | sharp daily drop (> 4%) | sharp daily rally, or +12% profit | every 5-30 sim min |
-| **Index** | funds and large caps | small caps; very loose stop | every 0.5-2 sim h |
-| **Noise** | at random | at random | every 3-15 sim min |
+| Strategy | Buys when | Sells when |
+|---|---|---|
+| **Value** | estimated mispricing < -3% | mispricing > +1.5%, or stop/take-profit |
+| **Whale** | mispricing < -6%, in large size | mispricing > +3% |
+| **Momentum** | 5-session return > +3% (stronger on Hype stocks) | trend turns, or a tight 10% stop |
+| **Contrarian** | sharp daily drop (> 4%) | sharp daily rally, or +12% profit |
+| **Index** | funds and large caps | small caps; very loose stop |
+| **Noise** | at random | at random |
 
-Every broker also has risk rules: a maximum number of names (20-60 by strategy), a maximum weight per name (10%, or 25% for Index), a cap of 5% of a stock's daily dollar volume per order, a stop-loss and a take-profit.
+With up to 16,384 participants instead of 256, each one decides about four times less often than in the first build (tens of minutes to hours of sim time), so total order flow per stock stays realistic. Every broker also has risk rules: a maximum number of names, a maximum weight per name, a cap of 5% of a stock's daily dollar volume per order, a stop-loss and a take-profit.
 
 ### Life cycle: active, broke, new
 
-Brokers pay **operating costs** every sim hour: 4-12% of starting capital per year for brokers, 2-5% for firms. That is the steady bleed that sinks participants without an edge. A broker **goes broke** when its equity falls below 50% of its starting capital, or below 30% of its peak (clients withdraw). Its slot is freed, any funds it sponsored close, and a new broker or firm is founded in that slot a few sim days later with a fresh name, strategy and capital. Ids are generational, so nothing of the old broker carries over.
+Brokers pay **operating costs** every sim hour. A broker **goes broke** when its equity falls below 50% of its starting capital, or below 30% of its peak. Its slot is freed, any funds it sponsored close, and the daily population step founds replacements with fresh names. Ids are generational, so nothing of the old broker carries over. In the probe, failures begin after about 450 days and reach roughly 400 by day 1,350.
+
+### Charts for brokers and for the sector
+
+Every broker and firm keeps an equity history (daily for a year, weekly for three years), shown in the Brokers & Firms window. The **Financials** window charts the sector as a whole (total broker equity and total firm equity) alongside the market-wide series: the four indices, policy rate, 10Y yield, inflation, credit spread and the number of listings.
 
 ---
 
@@ -107,7 +164,7 @@ The simulation is an **open system**. Cash is not conserved among the participan
 
 ### 2. Prices are quotes, not money
 
-When you buy, the counterparty is the **public float**: the anonymous mass of investors outside the 256 named participants. Their aggregate behaviour is what the model's noise and mispricing terms represent. A price is the rate at which that float will trade with you right now, and your own order moves it (square-root impact) before it fades.
+When you buy, the counterparty is the **public float**: the anonymous mass of investors outside the named brokers and firms. Their aggregate behaviour is what the model's noise and mispricing terms represent. A price is the rate at which that float will trade with you right now, and your own order moves it (square-root impact) before it fades.
 
 ### 3. Market cap is a mark, not a pile of cash
 

@@ -23,29 +23,48 @@
 //! (`tick_density`) without changing a single statistic of the market.
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
 use crate::broker::{
-    BROKE_FRACTION, Broker, BrokerId, BrokerKind, FEE_RATE, MAX_BROKERS, Signals, Strategy, random_name, score,
+    BROKE_FRACTION, Broker, BrokerId, BrokerKind, FEE_RATE, MAX_FIRMS, MAX_PARTICIPANTS, MAX_PLAIN_BROKERS, Signals,
+    Strategy, random_name, score,
 };
 use crate::console;
 use crate::console::Level;
 use crate::exchange::{EXCHANGE_COUNT, EXCHANGE_SPECS, Exchange};
+use crate::history::{History, HistoryKind};
 use crate::macroecon::{ERP_NEUTRAL, MacroState, Regime, TENORS};
 use crate::persona::{Perk, Persona};
 use crate::protocol::*;
 use crate::queue::CalendarQueue;
 use crate::rng::Rng;
 use crate::security::{
-    Exit, Factors, ListingSpec, MAX_MISPRICING, Security, SecurityId, SecurityKind, Sponsor, Ticker,
+    Exit, F_RATES, FACTOR_COUNT, Factors, ListingSpec, MAX_MISPRICING, Security, SecurityId, SecurityKind, Sponsor,
+    Ticker,
 };
 use crate::time::*;
 
-/// Hard cap on simultaneously listed securities (2^16).
-pub const MAX_SECURITIES: usize = 1 << 16;
-/// Band the population is steered into (2^13 ..= 2^15).
-pub const TARGET_MIN: f64 = 8_192.0;
-pub const TARGET_MAX: f64 = 32_768.0;
+mod persist;
+pub use persist::{LoadReport, SaveReport};
+
+/// Everything that lives in the game at once (2^15): half for securities,
+/// half for market participants (see [`MAX_PARTICIPANTS`]).
+pub const MAX_ENTITIES: usize = 1 << 15;
+/// Hard cap on simultaneously listed securities (2^14).
+pub const MAX_SECURITIES: usize = 1 << 14;
+/// The listed population hovers just above this floor and is pushed back
+/// up immediately if failures ever take it below.
+pub const TARGET_MIN: f64 = 8_000.0;
+pub const TARGET_MAX: f64 = MAX_SECURITIES as f64;
+/// Coarse back-history generated at world creation so the Year / 3Y / 10Y
+/// charts are populated on day 1 (520 weeks).
+pub const PREHISTORY_DAYS: u64 = 3_640;
+/// Days of that back-history simulated at daily (not weekly) resolution.
+const PREHISTORY_FINE_DAYS: u64 = 372;
 pub const WARMUP_DAYS: u64 = 28;
+const MARKET_SERIES_COUNT: usize = ALL_MARKET_SERIES.len();
+/// Sim seconds between rebuilds of the broker table sent to the UI.
+const BROKER_ROWS_REFRESH: f64 = 32.0;
 const EXCHANGE_STEP_SECS: f64 = 60.0;
 const MACRO_STEP_SECS: f64 = 3_600.0;
 const FEED_LEN: usize = 200;
@@ -53,24 +72,35 @@ const PLAYER_FILLS: usize = 200;
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
+    /// World seed: decides everything that happens in the market.
     pub seed: u64,
+    /// Game seed: identifies this play-through and keys its save files.
+    /// It never touches the simulation. `None` draws a fresh one.
+    pub game_seed: Option<u64>,
     pub initial_securities: usize,
+    /// Brokers and firms founded at world start (their caps are
+    /// [`MAX_PLAIN_BROKERS`] and [`MAX_FIRMS`]).
     pub brokers: usize,
-    pub firm_share: f64,
+    pub firms: usize,
     pub player_cash: f64,
-    /// Run the warm-up month so charts have history on the first frame.
+    /// Generate back-history and run the warm-up month, so every chart
+    /// range has data on the first frame.
     pub warmup: bool,
+    /// Length of the coarse back-history (rounded down to whole weeks).
+    pub prehistory_days: u64,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             seed: 0x5167_4D41_7469_7872, // "SigMAtixr"
-            initial_securities: 14_000,
-            brokers: MAX_BROKERS,
-            firm_share: 0.25,
+            game_seed: None,
+            initial_securities: 8_600,
+            brokers: MAX_PLAIN_BROKERS / 2,
+            firms: MAX_FIRMS / 2,
             player_cash: 1_000_000.0,
             warmup: true,
+            prehistory_days: PREHISTORY_DAYS,
         }
     }
 }
@@ -81,7 +111,6 @@ enum Ev {
     /// invalidated at once (see `reset_tick_schedule`).
     SecTick(SecurityId, u32),
     BrokerDecide(BrokerId),
-    BrokerFound(u16),
     ExchangeStep,
     MacroStep,
     DailyRoll,
@@ -140,6 +169,8 @@ pub struct Stats {
     pub acquisitions: u64,
     pub fund_closures: u64,
     pub splits: u64,
+    pub reverse_splits: u64,
+    pub rescues: u64,
     pub brokers_broke: u64,
     pub brokers_founded: u64,
     pub repairs: u64,
@@ -164,6 +195,14 @@ pub struct Advance {
 pub struct Engine {
     pub now: SimTime,
     seed: u64,
+    game_seed: u64,
+    /// Sim days before "day 1" (back-history plus warm-up).
+    epoch_days: u64,
+    /// Set by the runner once a non-1x speed has been used; saved with the
+    /// game so a dev-accelerated save can be told apart from a real one.
+    pub dev_time_used: bool,
+    /// True while back-history is generated: no scheduling, feed or stats.
+    prehistory: bool,
     rng: Rng,
     name_rng: Rng,
     queue: CalendarQueue<Ev>,
@@ -180,7 +219,21 @@ pub struct Engine {
 
     brokers: Vec<Option<Broker>>,
     broker_generations: Vec<u16>,
+    broker_free: Vec<u16>,
+    broker_names: HashSet<String>,
+    firm_count: usize,
+    plain_count: usize,
+    /// Fraction of broker decision events acted on (1 except in warm-up).
+    decision_density: f64,
     pub player: Player,
+
+    /// Chart history of market-wide series, indexed by [`MarketSeries`].
+    market: Vec<History>,
+    /// Total equity of [brokers, firms], refreshed at each daily roll.
+    sector_equity: [f64; 2],
+    broker_rows: Arc<Vec<BrokerRow>>,
+    broker_rows_at: SimTime,
+    pub selected_series: Option<MarketSeries>,
 
     pub carrying_capacity: f64,
     /// Multiplier on every security's print rate (0, 1]. Presentation only.
@@ -205,27 +258,41 @@ impl Engine {
         let mut eng = Self {
             now: 0.0,
             seed: config.seed,
+            game_seed: config.game_seed.unwrap_or_else(crate::save::fresh_seed),
+            epoch_days: 0,
+            dev_time_used: false,
+            prehistory: false,
             rng,
             name_rng,
             queue: CalendarQueue::new(4_096, 0.25),
             macro_state,
             exchanges,
-            factors: [[0.0; 4]; EXCHANGE_COUNT],
+            factors: [[0.0; FACTOR_COUNT]; EXCHANGE_COUNT],
             slots: Vec::new(),
             generations: Vec::new(),
             free_slots: Vec::new(),
             live: Vec::new(),
             live_pos: Vec::new(),
             tickers: HashSet::new(),
-            brokers: (0..MAX_BROKERS).map(|_| None).collect(),
-            broker_generations: vec![0; MAX_BROKERS],
+            brokers: Vec::new(),
+            broker_generations: Vec::new(),
+            broker_free: Vec::new(),
+            broker_names: HashSet::new(),
+            firm_count: 0,
+            plain_count: 0,
+            decision_density: 1.0,
             player: Player {
                 port: crate::broker::Portfolio::new(config.player_cash),
                 starting_cash: config.player_cash,
                 fills: VecDeque::new(),
                 companies: Vec::new(),
             },
-            carrying_capacity: 16_384.0,
+            market: (0..MARKET_SERIES_COUNT).map(|_| History::new(HistoryKind::Market)).collect(),
+            sector_equity: [0.0; 2],
+            broker_rows: Arc::new(Vec::new()),
+            broker_rows_at: f64::NEG_INFINITY,
+            selected_series: None,
+            carrying_capacity: 8_600.0,
             tick_density: 1.0,
             tick_epoch: 0,
             median_log_cap: (2e9f64).ln(),
@@ -237,60 +304,181 @@ impl Engine {
         };
         eng.refresh_factors();
         eng.carrying_capacity = eng.compute_carrying_capacity();
-        // During warm-up prints are sparse (see below), so schedule the very
-        // first ticks sparsely too.
-        let warm_density = 0.002;
+
+        // 1) The listed population. With warm-up it is grown through ten
+        //    years of coarse back-history; without (tests) it is created in
+        //    one go with random ages.
+        let listings = config.initial_securities.min(MAX_SECURITIES);
+        eng.prehistory = true;
         if config.warmup {
-            eng.tick_density = warm_density;
+            let days = config.prehistory_days / DAYS_PER_WEEK * DAYS_PER_WEEK;
+            eng.run_prehistory(listings, days);
+            eng.epoch_days = days + WARMUP_DAYS;
+        } else {
+            for _ in 0..listings {
+                let age = eng.rng.exponential(1.0 / (7.0 * SECS_PER_YEAR));
+                let initial_y = (0.35 * eng.rng.normal()).clamp(-1.0, 1.0);
+                eng.seed_listing(-age, initial_y);
+            }
         }
+        eng.prehistory = false;
+        eng.stats = Stats::default();
 
-        // Initial listings, spread over exchanges and pre-aged.
-        let weights = [30u32, 25, 25, 20];
-        for _ in 0..config.initial_securities.min(MAX_SECURITIES) {
-            let ex = eng.rng.weighted_index(&weights) as u8;
-            let kind = if eng.rng.chance(0.02) { SecurityKind::Fund } else { SecurityKind::Stock };
-            let initial_y = (0.35 * eng.rng.normal()).clamp(-1.0, 1.0);
-            eng.list_new(kind, ex, None, None, Sponsor::Engine, initial_y);
+        // 2) Market participants.
+        for _ in 0..config.firms {
+            eng.found_broker(BrokerKind::Firm);
         }
-        let firms = ((config.brokers as f64) * config.firm_share).round() as usize;
-        for slot in 0..config.brokers.min(MAX_BROKERS) {
-            let kind = if slot < firms { BrokerKind::Firm } else { BrokerKind::Broker };
-            eng.found_broker(slot as u16, kind);
+        for _ in 0..config.brokers {
+            eng.found_broker(BrokerKind::Broker);
         }
+        eng.refresh_sector_equity();
 
-        // Recurring events.
-        for ex in 0..EXCHANGE_COUNT as u8 {
-            eng.schedule_session(ex);
+        // 3) Recurring events and one price clock per security. During
+        //    warm-up prints are sparse and brokers act rarely: cheap, and
+        //    statistically identical thanks to the closed-form catch-up.
+        if config.warmup {
+            eng.tick_density = 0.002;
+            eng.decision_density = 0.05;
         }
-        eng.queue.push(EXCHANGE_STEP_SECS, Ev::ExchangeStep);
-        eng.queue.push(MACRO_STEP_SECS, Ev::MacroStep);
-        eng.queue.push(SECS_PER_DAY, Ev::DailyRoll);
+        eng.schedule_recurring();
+        eng.reset_tick_schedule();
 
         if config.warmup {
-            // A month of history at a low print rate: cheap, statistically
-            // identical (closed-form catch-up), and the chart is not empty.
-            let warm_end = WARMUP_DAYS as f64 * SECS_PER_DAY + 8.0 * SECS_PER_HOUR;
+            // A month of the full engine fills the intraday chart tiers.
+            let warm_end = eng.now + WARMUP_DAYS as f64 * SECS_PER_DAY + 8.0 * SECS_PER_HOUR;
             eng.advance_to(warm_end, None);
             eng.tick_density = 1.0;
+            eng.decision_density = 1.0;
             eng.reset_tick_schedule();
             // The player arrives on day 1: no warm-up interest or history.
             eng.player.port = crate::broker::Portfolio::new(config.player_cash);
             eng.feed.clear();
+            eng.stats = Stats::default();
         }
         console!(
             Level::Info,
             eng.now,
-            "engine ready: seed={:#x} live={} brokers={} K={:.0}",
+            "engine ready: seed={:#x} live={} brokers={} firms={} K={:.0}",
             eng.seed,
             eng.live.len(),
-            eng.brokers_alive(),
+            eng.plain_count,
+            eng.firm_count,
             eng.carrying_capacity
         );
         eng
     }
 
+    /// List one security of the starting population on a random exchange.
+    fn seed_listing(&mut self, born_at: SimTime, initial_y: f64) {
+        let ex = self.rng.weighted_index(&[30u32, 25, 25, 20]) as u8;
+        let kind = if self.rng.chance(0.02) { SecurityKind::Fund } else { SecurityKind::Stock };
+        self.list_new(kind, ex, None, None, Sponsor::Engine, initial_y, born_at);
+    }
+
+    /// Generate `days` of back-history without the event queue.
+    ///
+    /// The economy and the four market factors are stepped hourly (their
+    /// transitions are exact for any step). Securities are caught up once a
+    /// week, then once per trading day for the final year, which is exactly
+    /// the resolution the weekly and daily chart tiers store. Companies are
+    /// founded along the way (so ages are spread out) and one that fails is
+    /// replaced by a new listing, which gives the starting population a
+    /// natural mix of young, old, healthy and nearly-broke names.
+    fn run_prehistory(&mut self, listings: usize, days: u64) {
+        let end = days as f64 * SECS_PER_DAY;
+        let mut births: Vec<f64> =
+            (0..listings).map(|_| end - self.rng.exponential(1.0 / (7.0 * SECS_PER_YEAR))).collect();
+        births.sort_by(|a, b| b.total_cmp(a)); // earliest last: `pop` yields time order
+        let hour = years(SECS_PER_HOUR);
+        for d in 0..days {
+            for _ in 0..24 {
+                self.macro_state.step(hour, &mut self.rng);
+                let global_z = self.rng.normal();
+                for ex in self.exchanges.iter_mut() {
+                    ex.step(&self.macro_state, hour, global_z, &mut self.rng);
+                }
+            }
+            self.macro_state.step_regime_daily(&mut self.rng);
+            self.now = (d + 1) as f64 * SECS_PER_DAY;
+            self.refresh_factors();
+            while births.last().is_some_and(|&born| born <= self.now) {
+                let born = births.pop().expect("checked");
+                self.seed_listing(born, 0.0);
+            }
+            let weekday = d % DAYS_PER_WEEK;
+            let fine = d + PREHISTORY_FINE_DAYS >= days;
+            if weekday < TRADING_DAYS_PER_WEEK && (fine || weekday == TRADING_DAYS_PER_WEEK - 1) {
+                self.prehistory_close();
+                self.record_market();
+            }
+        }
+        for s in self.slots.iter_mut().flatten() {
+            s.prev_close = s.price;
+            s.penny_days = 0;
+        }
+        for ex in self.exchanges.iter_mut() {
+            ex.prev_close_index = ex.index_level();
+        }
+        self.carrying_capacity = self.compute_carrying_capacity();
+        self.update_median_cap();
+    }
+
+    /// One back-history "session close" for every listing.
+    fn prehistory_close(&mut self) {
+        let ids: Vec<SecurityId> = self.live_ids().collect();
+        for id in ids {
+            self.catch_up(id);
+            let Some(s) = self.security_mut(id) else { continue };
+            let mut dead = s.close_session().is_some();
+            if s.distance_to_default() < 0.0 {
+                if s.params.rescuable {
+                    s.rescue();
+                } else {
+                    dead = true;
+                }
+            }
+            s.maybe_reverse_split();
+            s.maybe_split();
+            if dead {
+                self.delist(id, Exit::Bankrupt);
+                self.seed_listing(self.now, 0.0);
+            }
+        }
+    }
+
+    /// (Re)create the recurring events relative to `now`. Steps stay on
+    /// whole-minute / whole-hour / midnight boundaries, so a loaded game
+    /// keeps the same cadence as an uninterrupted one.
+    fn schedule_recurring(&mut self) {
+        for ex in 0..EXCHANGE_COUNT as u8 {
+            self.schedule_session(ex);
+        }
+        let now = self.now;
+        let next = |step: f64| (now / step).floor() * step + step;
+        self.queue.push(next(EXCHANGE_STEP_SECS), Ev::ExchangeStep);
+        self.queue.push(next(MACRO_STEP_SECS), Ev::MacroStep);
+        self.queue.push(next(SECS_PER_DAY), Ev::DailyRoll);
+    }
+
     pub fn seed(&self) -> u64 {
         self.seed
+    }
+
+    pub fn game_seed(&self) -> u64 {
+        self.game_seed
+    }
+
+    /// Sim days that precede "day 1" of the game.
+    pub fn epoch_days(&self) -> u64 {
+        self.epoch_days
+    }
+
+    pub fn firms_alive(&self) -> usize {
+        self.firm_count
+    }
+
+    pub fn brokers(&self) -> impl Iterator<Item = &Broker> {
+        self.brokers.iter().flatten()
     }
 
     pub fn live_count(&self) -> usize {
@@ -298,7 +486,7 @@ impl Engine {
     }
 
     pub fn brokers_alive(&self) -> usize {
-        self.brokers.iter().filter(|b| b.is_some()).count()
+        self.firm_count + self.plain_count
     }
 
     pub fn security(&self, id: SecurityId) -> Option<&Security> {
@@ -321,6 +509,11 @@ impl Engine {
         self.exchanges.iter().any(|e| e.is_open)
     }
 
+    /// Queue a message for the UI (shown as a toast with the next snapshot).
+    pub fn notify(&mut self, notice: Notice) {
+        self.notices.push(notice);
+    }
+
     pub fn drain_notices(&mut self) -> Vec<Notice> {
         std::mem::take(&mut self.notices)
     }
@@ -330,15 +523,61 @@ impl Engine {
     fn refresh_factors(&mut self) {
         let m = &self.macro_state;
         let (y10, pi, cs) = (m.y10(), m.inflation, m.credit_spread);
+        let world = self.exchanges.iter().map(|e| e.factor).sum::<f64>() / EXCHANGE_COUNT as f64;
         for (i, ex) in self.exchanges.iter().enumerate() {
-            self.factors[i] = [ex.factor, -y10, pi, -cs];
+            // Order must match the `F_*` indices in `security`.
+            self.factors[i] = [ex.factor, -y10, pi, -cs, world, m.cycle_index, m.recovery_index];
         }
+    }
+
+    fn market_values(&self) -> [f64; MARKET_SERIES_COUNT] {
+        let m = &self.macro_state;
+        let ix = |i: usize| self.exchanges[i].index_level();
+        [
+            ix(0),
+            ix(1),
+            ix(2),
+            ix(3),
+            m.policy_rate * 100.0,
+            m.y10() * 100.0,
+            m.inflation * 100.0,
+            m.credit_spread * 100.0,
+            self.sector_equity[0],
+            self.sector_equity[1],
+            self.live.len() as f64,
+        ]
+    }
+
+    fn record_market(&mut self) {
+        let (now, values) = (self.now, self.market_values());
+        for (h, v) in self.market.iter_mut().zip(values) {
+            h.record(now, v);
+        }
+    }
+
+    /// Mark every broker to market: equity, peak, daily chart point, and
+    /// the two sector totals.
+    fn refresh_sector_equity(&mut self) {
+        let now = self.now;
+        let mut sector = [0.0; 2];
+        for i in 0..self.brokers.len() {
+            let Some(b) = self.brokers[i].as_ref() else { continue };
+            let equity = self.portfolio_value(&b.port);
+            let b = self.brokers[i].as_mut().expect("checked");
+            b.last_equity = equity;
+            b.peak_equity = b.peak_equity.max(equity);
+            b.history.record(now, equity);
+            sector[b.is_firm() as usize] += equity;
+        }
+        self.sector_equity = sector;
     }
 
     fn compute_carrying_capacity(&self) -> f64 {
         let m = &self.macro_state;
-        let k = 16_384.0 * (6.0 * m.output_gap + 5.0 * (ERP_NEUTRAL - m.erp)).exp();
-        k.clamp(9_000.0, 30_000.0)
+        // Booms add listings on top of the ~8,000 floor; busts only take
+        // capacity back down to it, never below.
+        let k = 8_600.0 * (3.0 * m.output_gap + 2.5 * (ERP_NEUTRAL - m.erp)).exp();
+        k.clamp(8_192.0, 11_000.0)
     }
 
     // ------------------------------------------------------------ main loop
@@ -374,10 +613,6 @@ impl Engine {
                 }
             }
             Ev::BrokerDecide(id) => self.on_broker_decide(id),
-            Ev::BrokerFound(slot) => {
-                let kind = if self.rng.chance(0.25) { BrokerKind::Firm } else { BrokerKind::Broker };
-                self.found_broker(slot, kind);
-            }
             Ev::ExchangeStep => {
                 let dt = years(EXCHANGE_STEP_SECS);
                 let global_z = self.rng.normal();
@@ -385,6 +620,7 @@ impl Engine {
                     ex.step(&self.macro_state, dt, global_z, &mut self.rng);
                 }
                 self.refresh_factors();
+                self.record_market();
                 self.queue.push(self.now + EXCHANGE_STEP_SECS, Ev::ExchangeStep);
             }
             Ev::MacroStep => {
@@ -423,6 +659,9 @@ impl Engine {
     // ------------------------------------------------------------ securities
 
     fn schedule_tick(&mut self, id: SecurityId, rate: f64, exchange: u8) {
+        if self.prehistory {
+            return; // back-history runs without the queue
+        }
         let ex = &self.exchanges[exchange as usize];
         let from = if ex.is_open {
             self.now
@@ -477,11 +716,27 @@ impl Engine {
         self.stats.sec_ticks += 1;
         let sec = self.security_mut(id).expect("checked above");
         sec.record_tick();
-        if sec.distance_to_default() < 0.0 {
-            self.delist(id, Exit::Bankrupt);
+        if sec.distance_to_default() < 0.0 && !self.default_or_rescue(id) {
             return;
         }
         self.schedule_tick(id, rate, exchange);
+    }
+
+    /// Fair value fell through the default barrier. A Key security is
+    /// rescued and stays listed (returns `true`); anything else goes
+    /// bankrupt (returns `false`).
+    fn default_or_rescue(&mut self, id: SecurityId) -> bool {
+        let Some(sec) = self.security_mut(id) else { return false };
+        if !sec.params.rescuable {
+            self.delist(id, Exit::Bankrupt);
+            return false;
+        }
+        sec.rescue();
+        let (ticker, price) = (sec.ticker, sec.price);
+        self.stats.rescues += 1;
+        self.push_feed(format!("{ticker} rescued and restructured at {price:.2}"));
+        console!(Level::Debug, self.now, "{ticker} rescued (Key perk)");
+        true
     }
 
     fn members_of(&self, ex: u8) -> Vec<SecurityId> {
@@ -523,22 +778,30 @@ impl Engine {
                 exits.push((id, exit));
             } else if s.distance_to_default() < 0.0 {
                 exits.push((id, Exit::Bankrupt));
-            } else if let Some(r) = s.maybe_split() {
+            } else if let Some(r) = s.maybe_split().or_else(|| s.maybe_reverse_split()) {
                 splits.push((id, r));
             }
         }
         for (id, r) in splits {
-            self.stats.splits += 1;
             for b in self.brokers.iter_mut().flatten() {
                 b.port.apply_split(id, r);
             }
             self.player.port.apply_split(id, r);
-            if let Some(t) = self.security(id).map(|s| s.ticker) {
+            let Some(t) = self.security(id).map(|s| s.ticker) else { continue };
+            if r > 1.0 {
+                self.stats.splits += 1;
                 self.push_feed(format!("{t} splits {r:.0}-for-1"));
+            } else {
+                self.stats.reverse_splits += 1;
+                self.push_feed(format!("{t} reverse-splits 1-for-{:.0}", 1.0 / r));
             }
         }
         for (id, exit) in exits {
-            self.delist(id, exit);
+            if exit == Exit::Bankrupt {
+                self.default_or_rescue(id);
+            } else {
+                self.delist(id, exit);
+            }
         }
         let e = &mut self.exchanges[ex as usize];
         e.is_open = false;
@@ -583,6 +846,8 @@ impl Engine {
     }
 
     /// List a new security. Returns its id, or `None` at the hard cap.
+    // Eight plain inputs; a one-use builder struct would only move them around.
+    #[allow(clippy::too_many_arguments)]
     fn list_new(
         &mut self,
         kind: SecurityKind,
@@ -591,6 +856,7 @@ impl Engine {
         ticker: Option<Ticker>,
         sponsor: Sponsor,
         initial_y: f64,
+        born_at: SimTime,
     ) -> Option<SecurityId> {
         if self.live.len() >= MAX_SECURITIES {
             return None;
@@ -615,7 +881,7 @@ impl Engine {
         let generation = self.generations[slot as usize];
         let id = SecurityId::new(slot, generation);
         let persona = persona.unwrap_or_else(|| match kind {
-            SecurityKind::Fund => Persona::EMPTY.with(Perk::Liquid),
+            SecurityKind::Fund => Persona::EMPTY,
             SecurityKind::Stock => Persona::random(&mut self.rng),
         });
         let ipo_price = match kind {
@@ -623,7 +889,7 @@ impl Engine {
             SecurityKind::Stock => (self.rng.range(2.0f64.ln(), 300.0f64.ln())).exp(),
         };
         let market_cap = (self.median_log_cap + 1.4 * self.rng.normal()).exp().clamp(5e7, 4e12);
-        let spec = ListingSpec { kind, exchange, persona, ticker, ipo_price, market_cap, sponsor, initial_y };
+        let spec = ListingSpec { kind, exchange, persona, ticker, ipo_price, market_cap, sponsor, initial_y, born_at };
         let factors = self.factors[exchange as usize];
         let sec = Security::list(id, spec, &factors, self.now, &mut self.rng);
         let rate = sec.params.tick_rate;
@@ -672,6 +938,9 @@ impl Engine {
             self.selected = None;
         }
         self.push_feed(format!("{} {} at {:.2}", sec.ticker, exit.label(), sec.price));
+        if self.prehistory {
+            return;
+        }
         console!(
             Level::Debug,
             self.now,
@@ -684,6 +953,9 @@ impl Engine {
     }
 
     fn push_feed(&mut self, text: String) {
+        if self.prehistory {
+            return;
+        }
         if self.feed.len() == FEED_LEN {
             self.feed.pop_front();
         }
@@ -702,19 +974,20 @@ impl Engine {
         self.update_median_cap();
         self.population_step();
         self.firm_actions();
-        for b in self.brokers.iter_mut().flatten() {
-            b.peak_equity = b.peak_equity.max(b.last_equity);
-        }
+        self.broker_population_step();
+        self.refresh_sector_equity();
         let m = &self.macro_state;
         console!(
             Level::Info,
             self.now,
-            "live={} K={:.0} ipo={} bk={} acq={} | {} | 3M {:.2}% 10Y {:.2}% pi {:.2}% | idx {:.0}/{:.0}/{:.0}/{:.0} | repairs={}",
+            "live={} K={:.0} ipo={} bk={} acq={} brokers={}+{} | {} | 3M {:.2}% 10Y {:.2}% pi {:.2}% | idx {:.0}/{:.0}/{:.0}/{:.0} | repairs={}",
             self.live.len(),
             self.carrying_capacity,
             self.stats.ipos,
             self.stats.bankruptcies,
             self.stats.acquisitions,
+            self.plain_count,
+            self.firm_count,
             m.regime.label(),
             m.curve.yield_at(0.25) * 100.0,
             m.y10() * 100.0,
@@ -755,13 +1028,16 @@ impl Engine {
         let m = &self.macro_state;
         let hot = (8.0 * (ERP_NEUTRAL - m.erp)).exp().clamp(0.3, 2.5);
         let crowd = (k / n).powi(2).clamp(0.05, 8.0);
-        // Hard band: never below 2^13, never above 2^15 in normal operation.
-        let floor_push = if n < TARGET_MIN { 4.0 } else { 1.0 };
-        let ceiling_cut = if n > TARGET_MAX { 0.0 } else { 1.0 };
-        let birth_rate_year = 0.05 * n * crowd * hot * floor_push * ceiling_cut;
-        let births = self.rng.poisson(birth_rate_year / 365.0);
+        // Close to the hard cap of 2^14 organic listing stops.
+        let room = if self.live.len() + 64 >= MAX_SECURITIES { 0.0 } else { 1.0 };
+        let birth_rate_year = 0.05 * n * crowd * hot * room;
+        // Floor: if failures ever take the population under ~8,000, a
+        // quarter of the shortfall re-lists every day and takeovers pause.
+        let floor = TARGET_MIN * 1.02;
+        let deficit = (floor - n).max(0.0);
+        let births = self.rng.poisson(birth_rate_year / 365.0 + 0.25 * deficit);
 
-        let acq_hazard = 0.04 * (n / k).powi(2) * if n > TARGET_MAX { 4.0 } else { 1.0 };
+        let acq_hazard = if n <= floor { 0.0 } else { 0.04 * (n / k).powi(2) };
         let acquisitions = self.rng.poisson(n * acq_hazard / 365.0);
 
         for _ in 0..births {
@@ -770,7 +1046,7 @@ impl Engine {
             let firm = if self.rng.chance(0.4) { self.random_firm() } else { None };
             let sponsor = firm.map_or(Sponsor::Engine, Sponsor::Firm);
             let kind = if fund { SecurityKind::Fund } else { SecurityKind::Stock };
-            if let Some(id) = self.list_new(kind, ex, None, None, sponsor, 0.0) {
+            if let Some(id) = self.list_new(kind, ex, None, None, sponsor, 0.0, self.now) {
                 self.stats.ipos += 1;
                 if let Some(fid) = firm {
                     self.underwrite(fid, id);
@@ -837,7 +1113,7 @@ impl Engine {
                 continue;
             }
             let ex = self.rng.below(EXCHANGE_COUNT) as u8;
-            if let Some(id) = self.list_new(SecurityKind::Fund, ex, None, None, Sponsor::Firm(fid), 0.0) {
+            if let Some(id) = self.list_new(SecurityKind::Fund, ex, None, None, Sponsor::Firm(fid), 0.0, self.now) {
                 self.stats.ipos += 1;
                 self.underwrite(fid, id);
                 let t = self.security(id).map(|s| s.ticker).unwrap_or(Ticker::new("?"));
@@ -849,28 +1125,62 @@ impl Engine {
 
     // ------------------------------------------------------------ brokers
 
-    fn found_broker(&mut self, slot: u16, kind: BrokerKind) {
-        let s = slot as usize;
-        if self.brokers[s].is_some() {
-            return;
+    /// Found a broker or firm, if its share of the participant pool has
+    /// room. Slots are recycled with a new generation, like securities.
+    fn found_broker(&mut self, kind: BrokerKind) -> Option<BrokerId> {
+        let (count, cap) = match kind {
+            BrokerKind::Firm => (self.firm_count, MAX_FIRMS),
+            BrokerKind::Broker => (self.plain_count, MAX_PLAIN_BROKERS),
+        };
+        if count >= cap {
+            return None;
         }
-        let id = BrokerId::new(slot, self.broker_generations[s]);
-        let names: HashSet<String> = self.brokers.iter().flatten().map(|b| b.name.clone()).collect();
+        let slot = match self.broker_free.pop() {
+            Some(s) => s,
+            None => {
+                if self.brokers.len() >= MAX_PARTICIPANTS {
+                    return None;
+                }
+                self.brokers.push(None);
+                self.broker_generations.push(0);
+                (self.brokers.len() - 1) as u16
+            }
+        };
+        let id = BrokerId::new(slot, self.broker_generations[slot as usize]);
+        let names = &self.broker_names;
         let name = random_name(kind, &mut self.name_rng, &|n: &str| names.contains(n));
+        self.broker_names.insert(name.clone());
         let b = Broker::found(id, name, kind, self.now, &mut self.rng);
         let rate = b.decision_rate;
-        if self.now > 0.0 {
-            self.push_feed(format!(
-                "{} founded ({}, {})",
-                b.name,
-                if b.is_firm() { "firm" } else { "broker" },
-                b.strategy.label()
-            ));
+        // Thousands of brokers come and go; only firms make the news.
+        if b.is_firm() && self.stats.brokers_founded >= (MAX_FIRMS / 2) as u64 {
+            self.push_feed(format!("{} founded (firm, {})", b.name, b.strategy.label()));
         }
-        self.brokers[s] = Some(b);
+        self.brokers[slot as usize] = Some(b);
+        match kind {
+            BrokerKind::Firm => self.firm_count += 1,
+            BrokerKind::Broker => self.plain_count += 1,
+        }
         self.stats.brokers_founded += 1;
         let dt = self.rng.exponential(rate);
         self.queue.push(self.now + dt, Ev::BrokerDecide(id));
+        Some(id)
+    }
+
+    /// Daily entry of new participants. Each pool is steered toward a
+    /// level that follows the economy: about half its cap in normal times,
+    /// more in booms, less after a bust (failures do the shrinking).
+    fn broker_population_step(&mut self) {
+        let m = &self.macro_state;
+        let level = (0.5 * (4.0 * m.output_gap + 6.0 * (ERP_NEUTRAL - m.erp)).exp()).clamp(0.35, 0.95);
+        for (kind, count, cap) in
+            [(BrokerKind::Firm, self.firm_count, MAX_FIRMS), (BrokerKind::Broker, self.plain_count, MAX_PLAIN_BROKERS)]
+        {
+            let shortfall = (cap as f64 * level - count as f64).max(0.0);
+            for _ in 0..self.rng.poisson(0.03 * shortfall + 0.3) {
+                self.found_broker(kind);
+            }
+        }
     }
 
     fn portfolio_value(&self, port: &crate::broker::Portfolio) -> f64 {
@@ -879,6 +1189,13 @@ impl Engine {
     }
 
     fn on_broker_decide(&mut self, id: BrokerId) {
+        let Some(rate) = self.broker(id).map(|b| b.decision_rate) else { return };
+        if self.decision_density < 1.0 && !self.rng.chance(self.decision_density) {
+            // Warm-up thinning: skip the decision, keep the clock running.
+            let dt = self.rng.exponential(rate);
+            self.queue.push(self.now + dt, Ev::BrokerDecide(id));
+            return;
+        }
         self.stats.broker_decisions += 1;
         let Some(b) = self.broker(id) else { return };
         let equity = self.portfolio_value(&b.port);
@@ -910,7 +1227,7 @@ impl Engine {
             momentum_5d: s.momentum(5),
             momentum_1d: if s.prev_close > 0.0 { (s.price / s.prev_close).ln() } else { 0.0 },
             is_fund: s.kind == SecurityKind::Fund,
-            momentum_persona: s.persona.has(Perk::Momentum),
+            hype_persona: s.persona.has(Perk::Hype),
             size: s.market_cap().max(1.0).ln() - self.median_log_cap,
         })
     }
@@ -982,11 +1299,15 @@ impl Engine {
     }
 
     fn broker_goes_broke(&mut self, id: BrokerId) {
-        let Some(b) = self.brokers[id.slot()].take() else { return };
+        let slot = id.slot();
+        let Some(b) = self.brokers[slot].take() else { return };
         self.stats.brokers_broke += 1;
-        self.broker_generations[id.slot()] = self.broker_generations[id.slot()].wrapping_add(1);
+        self.broker_generations[slot] = self.broker_generations[slot].wrapping_add(1);
+        self.broker_free.push(slot as u16);
+        self.broker_names.remove(&b.name);
         // Funds sponsored by a failed firm are wound up at NAV.
         if b.is_firm() {
+            self.firm_count -= 1;
             let orphaned: Vec<SecurityId> = self
                 .live_ids()
                 .filter(|&sid| {
@@ -996,15 +1317,16 @@ impl Engine {
             for sid in orphaned {
                 self.delist(sid, Exit::FundClosed);
             }
+            self.push_feed(format!("{} went broke after {:.0} days", b.name, (self.now - b.born_at) / SECS_PER_DAY));
+        } else {
+            self.plain_count -= 1;
         }
         if self.focused_broker == Some(id) {
             self.focused_broker = None;
         }
-        self.push_feed(format!("{} went broke after {:.0} days", b.name, (self.now - b.born_at) / SECS_PER_DAY));
-        console!(Level::Info, self.now, "broker {} ({}) broke", b.name, b.strategy.label());
-        // A replacement is founded a few days later: active -> broke -> new.
-        let delay = self.rng.exponential(1.0 / (3.0 * SECS_PER_DAY));
-        self.queue.push(self.now + delay, Ev::BrokerFound(id.slot() as u16));
+        console!(Level::Debug, self.now, "{} ({}) broke", b.name, b.strategy.label());
+        // No one-for-one replacement: new entrants arrive through
+        // `broker_population_step`, at a pace set by the economy.
     }
 
     // ------------------------------------------------------------ trading
@@ -1088,6 +1410,7 @@ impl Engine {
     pub fn apply(&mut self, cmd: &Command) {
         match cmd {
             Command::Select(id) => self.selected = *id,
+            Command::SelectSeries(series) => self.selected_series = *series,
             Command::FocusBroker(id) => self.focused_broker = *id,
             Command::Order { id, side, size } => self.player_order(*id, *side, *size),
             Command::Liquidate(id) => {
@@ -1144,9 +1467,10 @@ impl Engine {
                 Some(t) => t,
                 None => return fail(self, "ticker taken or invalid (2-5 letters)"),
             };
-        let Some(id) = self.list_new(kind, req.exchange, req.persona, Some(ticker), Sponsor::Player, 0.0) else {
+        let persona = req.persona.map(Persona::sanitized);
+        let Some(id) = self.list_new(kind, req.exchange, persona, Some(ticker), Sponsor::Player, 0.0, self.now) else {
             self.tickers.remove(&ticker);
-            return fail(self, "market is at its 65,536 listing cap");
+            return fail(self, "market is at its 16,384 listing cap");
         };
         // The player keeps a 40% founder stake bought at the offer price.
         let sec = self.slots[id.slot()].as_mut().expect("just listed");
@@ -1175,7 +1499,7 @@ impl Engine {
     }
 
     fn display_day(&self) -> i64 {
-        day_index(self.now) as i64 - WARMUP_DAYS as i64 + 1
+        day_index(self.now) as i64 - self.epoch_days as i64 + 1
     }
 
     fn holdings_of(&self, port: &crate::broker::Portfolio) -> Vec<HoldingRow> {
@@ -1212,7 +1536,7 @@ impl Engine {
             positions: b.port.positions.len(),
             trades: b.trades,
             realized_pnl: b.port.realized_pnl,
-            born_day: day_index(b.born_at) as i64 - WARMUP_DAYS as i64 + 1,
+            born_day: day_index(b.born_at) as i64 - self.epoch_days as i64 + 1,
             listings_sponsored: b.listings_sponsored,
         }
     }
@@ -1238,8 +1562,7 @@ impl Engine {
             })
             .collect();
         let p = &s.params;
-        let annual_vol =
-            (p.beta().powi(2) * fvol.powi(2) + (p.sigma_f * vol).powi(2) + (p.sigma_u * vol).powi(2)).sqrt();
+        let annual_vol = p.annual_vol(fvol, vol);
         let pos = self.player.port.positions.get(&id);
         Some(SecurityDetail {
             id,
@@ -1248,7 +1571,7 @@ impl Engine {
             exchange: s.exchange,
             persona: s.persona,
             sponsor: self.sponsor_name(s.sponsor),
-            listed_day: day_index(s.listed_at) as i64 - WARMUP_DAYS as i64 + 1,
+            listed_day: day_index(s.listed_at) as i64 - self.epoch_days as i64 + 1,
             price: s.price,
             prev_close: s.prev_close,
             day_open: s.day_open,
@@ -1260,12 +1583,13 @@ impl Engine {
             shares: s.shares,
             market_cap: s.market_cap(),
             beta: p.beta(),
-            duration: p.exposures[1],
+            duration: p.exposures[F_RATES],
             half_life_days: (2f64.ln() / p.kappa) * 365.0,
             annual_vol,
             distance_to_default: s.distance_to_default(),
-            closes: s.closes.iter().copied().collect(),
-            intraday: s.intraday.iter().copied().collect(),
+            age_years: s.age_years(),
+            rescues: s.rescues,
+            history: s.history.clone(),
             forecast,
             player_shares: pos.map_or(0.0, |p| p.shares),
             player_avg_cost: pos.map_or(0.0, |p| p.avg_cost()),
@@ -1325,12 +1649,18 @@ impl Engine {
             })
             .collect();
 
-        let brokers: Vec<BrokerRow> = self.brokers.iter().flatten().map(|b| self.broker_row(b)).collect();
+        // Thousands of rows with names: rebuilt every ~2 real seconds and
+        // shared by reference count in between.
+        if self.now - self.broker_rows_at >= BROKER_ROWS_REFRESH || self.now < self.broker_rows_at {
+            self.broker_rows = Arc::new(self.brokers.iter().flatten().map(|b| self.broker_row(b)).collect());
+            self.broker_rows_at = self.now;
+        }
         let broker_detail = self.focused_broker.and_then(|id| self.broker(id)).map(|b| BrokerDetail {
             row: self.broker_row(b),
             holdings: self.holdings_of(&b.port),
             fees_paid: b.port.fees_paid,
             interest_earned: b.port.interest_earned,
+            history: b.history.clone(),
         });
 
         let holdings = self.holdings_of(&self.player.port);
@@ -1365,19 +1695,25 @@ impl Engine {
             acquisitions: self.stats.acquisitions,
             fund_closures: self.stats.fund_closures,
             splits: self.stats.splits,
-            brokers_alive: self.brokers_alive(),
+            brokers_alive: self.plain_count,
+            firms_alive: self.firm_count,
             brokers_broke: self.stats.brokers_broke,
+            rescues: self.stats.rescues,
             repairs: self.stats.repairs,
         };
         Snapshot {
             time: self.now,
             day: self.display_day(),
+            epoch_days: self.epoch_days,
             weekday: weekday_name(self.now),
             clock: clock_string(self.now),
             seed: self.seed,
             speed: 1.0,
             paused: false,
             closed_boost_active: false,
+            time_controls: crate::runner::TIME_CONTROLS,
+            dev_time_used: self.dev_time_used,
+            series: self.selected_series.map(|s| (s, self.market[s as usize].clone())),
             lag_secs: 0.0,
             events_per_real_sec: 0.0,
             tick_density: self.tick_density,
@@ -1387,7 +1723,7 @@ impl Engine {
             exchanges,
             detail: self.selected.and_then(|id| self.detail_for(id)),
             rows,
-            brokers,
+            brokers: Arc::clone(&self.broker_rows),
             broker_detail,
             player,
             population,
@@ -1428,6 +1764,12 @@ impl Engine {
         }
         if self.live.len() > MAX_SECURITIES {
             return Err("security cap exceeded".into());
+        }
+        if self.firm_count > MAX_FIRMS || self.plain_count > MAX_PLAIN_BROKERS {
+            return Err("participant cap exceeded".into());
+        }
+        if self.live.len() + self.firm_count + self.plain_count > MAX_ENTITIES {
+            return Err("entity cap exceeded".into());
         }
         Ok(())
     }
@@ -1474,7 +1816,14 @@ mod tests {
     use super::*;
 
     fn small(seed: u64) -> Engine {
-        Engine::new(EngineConfig { seed, initial_securities: 1_500, brokers: 64, warmup: false, ..Default::default() })
+        Engine::new(EngineConfig {
+            seed,
+            initial_securities: 1_500,
+            brokers: 48,
+            firms: 16,
+            warmup: false,
+            ..Default::default()
+        })
     }
 
     #[test]
@@ -1499,7 +1848,7 @@ mod tests {
         let id = e.live_ids().next().unwrap();
         e.delist(id, Exit::Acquired);
         assert!(e.security(id).is_none());
-        let new = e.list_new(SecurityKind::Stock, 0, None, None, Sponsor::Engine, 0.0).unwrap();
+        let new = e.list_new(SecurityKind::Stock, 0, None, None, Sponsor::Engine, 0.0, e.now).unwrap();
         // Slot is reused, generation differs, old id stays dead.
         assert_eq!(new.slot(), id.slot());
         assert_ne!(new, id);
@@ -1544,14 +1893,14 @@ mod tests {
         e.apply(&Command::Launch(LaunchRequest {
             capital: 200_000.0,
             exchange: 2,
-            persona: Some(Persona::parse("BLO")),
+            persona: Some(Persona::parse("BKO")),
             ticker: Some("ZZTOP".into()),
             fund: false,
         }));
         let (id, t) = (e.player.companies[0], Ticker::new("ZZTOP"));
         let s = e.security(id).unwrap();
         assert_eq!(s.ticker, t);
-        assert_eq!(s.persona.letters(), "BLO");
+        assert_eq!(s.persona.letters(), "BKO");
         assert!((e.player.port.shares_of(id) / s.shares - 0.4).abs() < 1e-9);
     }
 }

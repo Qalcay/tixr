@@ -11,11 +11,17 @@
 
 use std::collections::BTreeMap;
 
+use crate::history::{History, HistoryKind};
 use crate::rng::Rng;
 use crate::security::SecurityId;
 use crate::time::SimTime;
 
-pub const MAX_BROKERS: usize = 256;
+/// Slots shared by brokers and firms: half of the game's 2^15 entity budget
+/// (the other half belongs to securities).
+pub const MAX_PARTICIPANTS: usize = 1 << 14;
+/// Firms ("finance") get 15 % of the participant pool, brokers the rest.
+pub const MAX_FIRMS: usize = MAX_PARTICIPANTS * 15 / 100;
+pub const MAX_PLAIN_BROKERS: usize = MAX_PARTICIPANTS - MAX_FIRMS;
 /// Fee charged on every trade, as a fraction of notional (5 bps).
 pub const FEE_RATE: f64 = 0.0005;
 /// Broker is declared broke below this fraction of its starting capital.
@@ -183,6 +189,8 @@ pub struct Broker {
     pub peak_equity: f64,
     pub last_equity: f64,
     pub listings_sponsored: u32,
+    /// Daily equity for the Brokers window chart (display only).
+    pub history: History,
 }
 
 impl Broker {
@@ -195,10 +203,13 @@ impl Broker {
             _ => base_capital,
         };
         let minutes_between = match strategy {
-            Strategy::Whale => rng.range(60.0, 240.0),
-            Strategy::Index => rng.range(30.0, 120.0),
-            Strategy::Noise => rng.range(3.0, 15.0),
-            _ => rng.range(5.0, 30.0),
+            // With thousands of participants each one acts less often than
+            // in the 256-broker build, so total order flow per stock (and
+            // with it the impact noise in prices) stays realistic.
+            Strategy::Whale => rng.range(240.0, 960.0),
+            Strategy::Index => rng.range(120.0, 480.0),
+            Strategy::Noise => rng.range(15.0, 60.0),
+            _ => rng.range(30.0, 120.0),
         };
         let trade_frac = match strategy {
             Strategy::Whale => rng.range(0.02, 0.05),
@@ -243,6 +254,7 @@ impl Broker {
             peak_equity: capital,
             last_equity: capital,
             listings_sponsored: 0,
+            history: History::new(HistoryKind::Equity),
         }
     }
 
@@ -259,7 +271,8 @@ pub struct Signals {
     pub momentum_5d: f64,
     pub momentum_1d: f64,
     pub is_fund: bool,
-    pub momentum_persona: bool,
+    /// Carries the Hype perk: momentum traders chase it harder.
+    pub hype_persona: bool,
     /// ln(market cap) relative to the market median, ~N(0, 1.5).
     pub size: f64,
 }
@@ -275,7 +288,7 @@ pub fn score(strategy: Strategy, s: &Signals, rng: &mut Rng) -> f64 {
             if s.mispricing < -threshold || s.mispricing > threshold * 0.5 { -s.mispricing } else { 0.0 }
         }
         Strategy::Momentum => {
-            let boost = if s.momentum_persona { 1.5 } else { 1.0 };
+            let boost = if s.hype_persona { 1.5 } else { 1.0 };
             let m = s.momentum_5d * boost;
             if m.abs() > 0.03 { m } else { 0.0 }
         }
@@ -299,52 +312,81 @@ pub fn score(strategy: Strategy, s: &Signals, rng: &mut Rng) -> f64 {
     }
 }
 
-const NAME_HEADS: [&str; 24] = [
-    "Aster",
-    "Bramble",
-    "Cobalt",
-    "Delta",
-    "Ember",
-    "Granite",
-    "Harbor",
-    "Iron",
-    "Juniper",
-    "Kestrel",
-    "Lumen",
-    "Meridian",
-    "Northgate",
-    "Onyx",
-    "Pike",
-    "Quill",
-    "Raven",
-    "Summit",
-    "Tidal",
-    "Umber",
-    "Vale",
-    "Willow",
-    "Yarrow",
-    "Zenith",
+const NAME_STEMS: [&str; 40] = [
+    "Ast", "Bram", "Cob", "Del", "Emb", "Fen", "Gran", "Harb", "Ir", "Jun", "Kest", "Lum", "Mer", "Nor", "On", "Pik",
+    "Quil", "Rav", "Sum", "Tid", "Umb", "Val", "Wil", "Yar", "Zen", "Ald", "Bex", "Cor", "Dun", "Esk", "Fal", "Gil",
+    "Hol", "Ing", "Kel", "Lor", "Mar", "Nev", "Orl", "Pen",
 ];
-const BROKER_TAILS: [&str; 5] = ["Brokerage", "Securities", "Trading", "Markets", "Partners"];
-const FIRM_TAILS: [&str; 5] = ["Capital", "Holdings", "Group", "Ventures", "& Co"];
+const NAME_ENDS: [&str; 32] = [
+    "er", "ble", "alt", "ta", "ern", "wick", "ite", "or", "on", "iper", "rel", "en", "idian", "gate", "yx", "e", "l",
+    "mont", "al", "ber", "ow", "row", "ith", "ford", "ham", "by", "stone", "field", "mere", "ley", "ton", "well",
+];
+const BROKER_TAILS: [&str; 6] = ["Brokerage", "Securities", "Trading", "Markets", "Partners", "Advisors"];
+const FIRM_TAILS: [&str; 6] = ["Capital", "Holdings", "Group", "Ventures", "& Co", "Financial"];
 
+/// A pronounceable two-part name plus a business suffix: 40 x 32 x 6 =
+/// 7,680 names per kind, enough that numbered duplicates are rare even with
+/// every participant slot in use.
 pub fn random_name(kind: BrokerKind, rng: &mut Rng, taken: &dyn Fn(&str) -> bool) -> String {
     let tails: &[&str] = if kind == BrokerKind::Firm { &FIRM_TAILS } else { &BROKER_TAILS };
-    for _ in 0..32 {
-        let name = format!("{} {}", NAME_HEADS[rng.below(NAME_HEADS.len())], tails[rng.below(tails.len())]);
+    let draw = |rng: &mut Rng| {
+        format!(
+            "{}{} {}",
+            NAME_STEMS[rng.below(NAME_STEMS.len())],
+            NAME_ENDS[rng.below(NAME_ENDS.len())],
+            tails[rng.below(tails.len())]
+        )
+    };
+    for _ in 0..8 {
+        let name = draw(rng);
         if !taken(&name) {
             return name;
         }
     }
     let mut n = 2;
     loop {
-        let name = format!("{} {} {}", NAME_HEADS[rng.below(NAME_HEADS.len())], tails[rng.below(tails.len())], n);
+        let name = format!("{} {n}", draw(rng));
         if !taken(&name) {
             return name;
         }
         n += 1;
     }
 }
+
+// ------------------------------------------------------------- persistence
+
+impl crate::save::Persist for BrokerId {
+    fn put(&self, w: &mut crate::save::Writer) {
+        self.0.put(w);
+    }
+    fn get(r: &mut crate::save::Reader) -> crate::save::Result<Self> {
+        Ok(BrokerId(u32::get(r)?))
+    }
+}
+crate::tag_enum!(BrokerKind { Broker = 0, Firm = 1 });
+crate::tag_enum!(Strategy { Value = 0, Momentum = 1, Index = 2, Contrarian = 3, Noise = 4, Whale = 5 });
+crate::record!(Position { shares, cost });
+crate::record!(Portfolio { cash, positions, realized_pnl, fees_paid, interest_earned });
+crate::record!(Broker {
+    id,
+    name,
+    kind,
+    strategy,
+    port,
+    initial_capital,
+    born_at,
+    trades,
+    decision_rate,
+    trade_frac,
+    max_position_frac,
+    max_positions,
+    stop_loss,
+    take_profit,
+    opex_rate,
+    peak_equity,
+    last_equity,
+    listings_sponsored,
+} skip { history: History::new(HistoryKind::Equity) });
 
 #[cfg(test)]
 mod tests {
@@ -383,7 +425,7 @@ mod tests {
             momentum_5d: 0.0,
             momentum_1d: 0.0,
             is_fund: false,
-            momentum_persona: false,
+            hype_persona: false,
             size: 0.0,
         };
         assert!(score(Strategy::Value, &s, &mut rng) > 0.0);

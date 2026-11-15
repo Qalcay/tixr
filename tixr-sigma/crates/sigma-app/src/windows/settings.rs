@@ -22,28 +22,37 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     let mut open = true;
     let mut commands = Vec::new();
     egui::Window::new("Settings").open(&mut open).resizable(false).default_width(380.0).show(ctx, |ui| {
+        // Speed is a development tool; a release game is time-locked, and
+        // the engine ignores speed commands there even if one were sent.
+        let time_controls = app.snap.as_ref().is_some_and(|s| s.time_controls);
         let s = &mut app.settings;
         egui::Grid::new("settings").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            ui.label("Simulation speed");
-            ui.horizontal_wrapped(|ui| {
-                for v in SPEEDS {
-                    if ui.selectable_label(s.speed == v, format!("{v}x")).clicked() {
-                        s.speed = v;
-                        commands.push(Command::SetSpeed(v));
+            if time_controls {
+                ui.label("Simulation speed (dev)");
+                ui.horizontal_wrapped(|ui| {
+                    for v in SPEEDS {
+                        if ui.selectable_label(s.speed == v, format!("{v}x")).clicked() {
+                            s.speed = v;
+                            commands.push(Command::SetSpeed(v));
+                        }
                     }
-                }
-            });
-            ui.end_row();
-            ui.label("");
-            let mins = REAL_SECS_PER_SIM_DAY / 60.0 / s.speed;
-            ui.label(RichText::new(format!("1 sim day = {mins:.1} real minutes (1x = 90 min)")).small());
-            ui.end_row();
+                });
+                ui.end_row();
+                ui.label("");
+                let mins = REAL_SECS_PER_SIM_DAY / 60.0 / s.speed;
+                ui.label(RichText::new(format!("1 sim day = {mins:.1} real minutes (1x = 90 min)")).small());
+                ui.end_row();
 
-            ui.label("Fast-forward closed hours");
-            if ui.checkbox(&mut s.closed_boost, "8x while every exchange is shut").changed() {
-                commands.push(Command::SetClosedBoost(s.closed_boost));
+                ui.label("Fast-forward closed hours (dev)");
+                if ui.checkbox(&mut s.closed_boost, "8x while every exchange is shut").changed() {
+                    commands.push(Command::SetClosedBoost(s.closed_boost));
+                }
+                ui.end_row();
+            } else {
+                ui.label("Time");
+                ui.label("Locked: 90 real minutes per sim day.");
+                ui.end_row();
             }
-            ui.end_row();
 
             ui.label("Layout");
             ui.horizontal(|ui| {

@@ -1,49 +1,23 @@
 //! Hand-drawn charts using egui's `Painter`.
 //!
+//! Every chart range (1H ... 10Y) is drawn from the engine's pre-aggregated
+//! history tiers, so a redraw is "copy a few hundred points and stroke one
+//! polyline": the same cost for an hour as for ten years, with no cached
+//! images and nothing to recompute when the range changes.
+//!
 //! Replaces `egui_plot` (one fewer dependency tree, and the charts here are
 //! simple: a line, a forecast cone, a few grid lines). Drawing directly also
 //! lets the chart fill exactly the rect it is given, so it can never push
 //! neighbouring panels around.
 
 use eframe::egui::{self, Color32, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2};
+use sigma_engine::history::{ChartRange, History};
 use sigma_engine::macroecon::{TENOR_LABELS, TENORS};
 use sigma_engine::protocol::{MacroView, SecurityDetail};
+use sigma_engine::time::SECS_PER_DAY;
 
 use crate::format;
 use crate::theme::Palette;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChartRange {
-    Intraday,
-    Month,
-    Quarter,
-    Year,
-    All,
-}
-
-pub const ALL_RANGES: [ChartRange; 5] =
-    [ChartRange::Intraday, ChartRange::Month, ChartRange::Quarter, ChartRange::Year, ChartRange::All];
-
-impl ChartRange {
-    pub fn label(self) -> &'static str {
-        match self {
-            ChartRange::Intraday => "1D",
-            ChartRange::Month => "1M",
-            ChartRange::Quarter => "3M",
-            ChartRange::Year => "1Y",
-            ChartRange::All => "All",
-        }
-    }
-    fn sessions(self) -> usize {
-        match self {
-            ChartRange::Intraday => 0,
-            ChartRange::Month => 22,
-            ChartRange::Quarter => 66,
-            ChartRange::Year => 260,
-            ChartRange::All => usize::MAX,
-        }
-    }
-}
 
 /// Maps data space to screen space for one chart.
 struct Frame {
@@ -92,11 +66,31 @@ fn draw_grid(painter: &egui::Painter, frame: &Frame, pal: &Palette, label: impl 
     }
 }
 
+/// "3.2d ago" style label for a point `secs` sim seconds in the past.
+fn ago(secs: f64) -> String {
+    let s = secs.max(0.0);
+    if s < 90.0 {
+        "now".to_string()
+    } else if s < 2.0 * 3_600.0 {
+        format!("{:.0}m ago", s / 60.0)
+    } else if s < 2.0 * SECS_PER_DAY {
+        format!("{:.1}h ago", s / 3_600.0)
+    } else if s < 2.0 * 365.0 * SECS_PER_DAY {
+        format!("{:.0}d ago", s / SECS_PER_DAY)
+    } else {
+        format!("{:.1}y ago", s / (365.0 * SECS_PER_DAY))
+    }
+}
+
 /// Price history plus the model's forecast cone (±1σ, ±2σ, mean).
+///
+/// The x axis is the bar index, not the clock, so nights and weekends take
+/// no room (the convention on every trading screen).
 pub fn price_chart(
     ui: &mut Ui,
     size: egui::Vec2,
     d: &SecurityDetail,
+    now: f64,
     range: ChartRange,
     forecast: bool,
     pal: &Palette,
@@ -106,34 +100,38 @@ pub fn price_chart(
     painter.rect_filled(rect, 2.0, pal.plot_bg);
     let rect = rect.shrink(4.0);
 
-    let mut series: Vec<f64> = if range == ChartRange::Intraday {
-        d.intraday.iter().map(|&v| v as f64).collect()
-    } else {
-        let n = d.closes.len();
-        let take = range.sessions().min(n);
-        d.closes[n - take..].iter().map(|&v| v as f64).collect()
-    };
-    series.push(d.price);
+    let mut series: Vec<(f64, f64)> =
+        d.history.session_points(range, now).into_iter().map(|(t, v)| (t, v as f64)).collect();
+    // The live price is the right-hand end of every range.
+    match series.last_mut() {
+        Some(last) if now - last.0 < 1.0 => last.1 = d.price,
+        _ => series.push((now, d.price)),
+    }
     if series.len() < 2 {
-        series.insert(0, d.prev_close);
+        series.insert(0, (now - range.window_secs(), d.prev_close));
     }
     let last_x = (series.len() - 1) as f64;
 
-    // Forecast in trading sessions (5 per 7 calendar days), limited to a
-    // third of the visible history so it never dominates the chart.
-    let cone: Vec<(f64, f64, f64, f64, f64, f64)> = if forecast && range != ChartRange::Intraday {
-        let max_sessions = (series.len() as f64 / 3.0).clamp(5.0, 43.0);
+    // Forecast cone on the longer ranges, limited to a third of the visible
+    // history so it never dominates. Bars per sim day converts the
+    // forecast's calendar days into this range's x units.
+    let long_range =
+        matches!(range, ChartRange::Month | ChartRange::Year | ChartRange::ThreeYear | ChartRange::TenYear);
+    let cone: Vec<(f64, f64, f64, f64, f64, f64)> = if forecast && long_range {
+        let span_days = ((now - series[0].0) / SECS_PER_DAY).max(1e-6);
+        let bars_per_day = last_x / span_days;
+        let max_bars = (series.len() as f64 / 3.0).max(3.0);
         d.forecast
             .iter()
-            .map(|f| (last_x + f.days_ahead * 5.0 / 7.0, f.mean, f.lo1, f.hi1, f.lo2, f.hi2))
-            .filter(|p| p.0 - last_x <= max_sessions)
+            .map(|f| (last_x + f.days_ahead * bars_per_day, f.mean, f.lo1, f.hi1, f.lo2, f.hi2))
+            .filter(|p| p.0 - last_x <= max_bars)
             .collect()
     } else {
         Vec::new()
     };
 
-    let mut lo = series.iter().copied().fold(f64::INFINITY, f64::min);
-    let mut hi = series.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let mut lo = series.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let mut hi = series.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
     for c in &cone {
         lo = lo.min(c.2);
         hi = hi.max(c.3);
@@ -144,7 +142,7 @@ pub fn price_chart(
     draw_grid(&painter, &frame, pal, format::price);
 
     let clip = painter.with_clip_rect(rect);
-    if !cone.is_empty() {
+    if cone.len() > 1 {
         let mut band2: Vec<(f64, f64, f64)> = vec![(last_x, d.price, d.price)];
         let mut band1 = band2.clone();
         band2.extend(cone.iter().map(|c| (c.0, c.4, c.5)));
@@ -156,15 +154,14 @@ pub fn price_chart(
             .collect();
         clip.add(Shape::dashed_line(&mean, Stroke::new(1.0, pal.accent), 4.0, 3.0));
     }
-    let up = d.price >= series[0];
+    let up = d.price >= series[0].1;
     let color = if up { pal.up } else { pal.down };
-    let line: Vec<Pos2> = series.iter().enumerate().map(|(i, &v)| frame.to_screen(i as f64, v)).collect();
+    let line: Vec<Pos2> = series.iter().enumerate().map(|(i, p)| frame.to_screen(i as f64, p.1)).collect();
     clip.add(Shape::line(line, Stroke::new(1.4, color)));
 
     // Fair value marker.
-    if range != ChartRange::Intraday {
-        let fv = d.fair_value.clamp(frame.y0, frame.y1);
-        let y = frame.to_screen(0.0, fv).y;
+    if long_range && d.fair_value >= frame.y0 && d.fair_value <= frame.y1 {
+        let y = frame.to_screen(0.0, d.fair_value).y;
         clip.add(Shape::dashed_line(
             &[pos2(rect.left(), y), pos2(rect.right(), y)],
             Stroke::new(1.0, pal.text_weak),
@@ -178,16 +175,10 @@ pub fn price_chart(
     {
         let fx = ((hover.x - rect.left()) / rect.width()) as f64 * (frame.x1 - frame.x0);
         let text = if fx <= last_x {
-            let i = (fx.round() as usize).min(series.len() - 1);
-            format::price(series[i]).to_string()
+            let (t, v) = series[(fx.round() as usize).min(series.len() - 1)];
+            format!("{}  {}", format::price(v), ago(now - t))
         } else if let Some(c) = cone.iter().min_by(|a, b| (a.0 - fx).abs().total_cmp(&(b.0 - fx).abs())) {
-            format!(
-                "+{:.0}d mean {} (68%: {}..{})",
-                (c.0 - last_x) * 7.0 / 5.0,
-                format::price(c.1),
-                format::price(c.2),
-                format::price(c.3)
-            )
+            format!("forecast mean {} (68%: {}..{})", format::price(c.1), format::price(c.2), format::price(c.3))
         } else {
             String::new()
         };
@@ -199,6 +190,57 @@ pub fn price_chart(
             FontId::monospace(11.0),
             pal.text,
         );
+    }
+}
+
+/// A plain line chart of one history range (broker equity, market series).
+/// The x axis is time here, because these series run around the clock.
+pub fn history_chart(
+    ui: &mut Ui,
+    size: egui::Vec2,
+    history: &History,
+    now: f64,
+    range: ChartRange,
+    label: impl Fn(f64) -> String,
+    pal: &Palette,
+) {
+    let (resp, painter) = ui.allocate_painter(size, Sense::hover());
+    let rect = resp.rect;
+    painter.rect_filled(rect, 2.0, pal.plot_bg);
+    let rect = rect.shrink(4.0);
+    let pts = history.points(range, now);
+    if pts.len() < 2 {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "not enough history for this range yet",
+            FontId::proportional(12.0),
+            pal.text_weak,
+        );
+        return;
+    }
+    let lo = pts.iter().map(|p| p.1 as f64).fold(f64::INFINITY, f64::min);
+    let hi = pts.iter().map(|p| p.1 as f64).fold(f64::NEG_INFINITY, f64::max);
+    let pad = ((hi - lo) * 0.08).max(hi.abs() * 0.002).max(1e-9);
+    let frame = Frame { rect, x0: pts[0].0, x1: pts[pts.len() - 1].0.max(pts[0].0 + 1.0), y0: lo - pad, y1: hi + pad };
+    draw_grid(&painter, &frame, pal, &label);
+    let up = pts[pts.len() - 1].1 >= pts[0].1;
+    let line: Vec<Pos2> = pts.iter().map(|&(t, v)| frame.to_screen(t, v as f64)).collect();
+    painter.with_clip_rect(rect).add(Shape::line(line, Stroke::new(1.4, if up { pal.up } else { pal.down })));
+    if let Some(hover) = resp.hover_pos()
+        && rect.contains(hover)
+    {
+        let t = frame.x0 + ((hover.x - rect.left()) / rect.width()) as f64 * (frame.x1 - frame.x0);
+        if let Some(&(pt, pv)) = pts.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())) {
+            painter.line_segment([pos2(hover.x, rect.top()), pos2(hover.x, rect.bottom())], Stroke::new(1.0, pal.grid));
+            painter.text(
+                pos2(rect.left() + 4.0, rect.top() + 2.0),
+                egui::Align2::LEFT_TOP,
+                format!("{}  {}", label(pv as f64), ago(now - pt)),
+                FontId::monospace(11.0),
+                pal.text,
+            );
+        }
     }
 }
 

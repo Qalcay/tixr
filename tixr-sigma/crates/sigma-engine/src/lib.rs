@@ -13,6 +13,8 @@
 //! | [`macroecon`] | output gap, inflation, Taylor rule, Nelson-Siegel curve   |
 //! | [`exchange`]  | per-exchange market factor (earnings x valuation)         |
 //! | [`security`]  | closed-form price model, listings, splits, exits          |
+//! | [`history`]   | tiered chart history (Hour ... 10-Year, instant to draw)  |
+//! | [`save`]      | save container, tamper seal, zero-dependency serialiser   |
 //! | [`broker`]    | portfolios, brokers/firms, strategies                     |
 //! | [`engine`]    | the event loop that ties it all together                  |
 //! | [`protocol`]  | Command / Snapshot messages for the UI thread             |
@@ -23,15 +25,17 @@ pub mod broker;
 pub mod console;
 pub mod engine;
 pub mod exchange;
+pub mod history;
 pub mod macroecon;
 pub mod persona;
 pub mod protocol;
 pub mod queue;
 pub mod rng;
 pub mod runner;
+pub mod save;
 pub mod security;
 pub mod time;
 
-pub use engine::{Engine, EngineConfig, MAX_SECURITIES, TARGET_MAX, TARGET_MIN};
+pub use engine::{Engine, EngineConfig, MAX_ENTITIES, MAX_SECURITIES, TARGET_MAX, TARGET_MIN};
 pub use protocol::{Command, Snapshot};
-pub use runner::{EngineHandle, spawn};
+pub use runner::{EngineHandle, RunnerOptions, spawn};

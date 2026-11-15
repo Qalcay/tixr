@@ -176,6 +176,19 @@ impl<T> CalendarQueue<T> {
         }
     }
 
+    /// Every pending event in pop order, without disturbing the queue.
+    /// Pushing the result into a fresh queue reproduces the same pop order
+    /// (ties keep their relative sequence), which is how a saved game
+    /// restores its schedule.
+    pub fn pending(&self) -> Vec<(f64, T)>
+    where
+        T: Clone,
+    {
+        let mut all: Vec<&Entry<T>> = self.buckets.iter().flatten().chain(self.overflow.iter()).collect();
+        all.sort_by(|a, b| a.key_cmp(b));
+        all.into_iter().map(|e| (e.time, e.item.clone())).collect()
+    }
+
     /// Time of the earliest pending event (O(N) worst case; diagnostics only).
     pub fn peek_time(&self) -> Option<f64> {
         let ring_min = self.buckets.iter().filter_map(|b| b.last().map(|e| e.time)).min_by(|a, b| a.total_cmp(b));

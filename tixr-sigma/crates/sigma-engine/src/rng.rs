@@ -146,6 +146,10 @@ impl Rng {
     }
 }
 
+// Saved exactly (including the spare Box-Muller normal), so a loaded game
+// draws the same random numbers an uninterrupted one would have.
+crate::record!(Rng { s, spare_normal });
+
 #[cfg(test)]
 mod tests {
     use super::*;
